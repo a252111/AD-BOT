@@ -1,6 +1,7 @@
 from highrise import BaseBot, User, Position
 from highrise.__main__ import BotDefinition
 from asyncio import sleep, create_task, CancelledError
+from urllib.parse import urlparse, parse_qs
 import asyncio
 import os
 import json
@@ -33,7 +34,7 @@ DEFAULT_CONFIG = {
         "dj": {"x": 9.5, "y": 10.75, "z": 10.5}
     },
     "language": "fa",
-    "welcome_message": "✨ 🌟 𝐖𝐞𝐥𝐜𝐨𝐦𝐞 {username} ❤️ 𝐆𝐥𝐚𝐝 𝐭𝐨 𝐡𝐚𝐯𝐞 𝐲𝐨𝐮 𝐡𝐞𝐫𝐞!\n🕺 𝐔𝐬𝐞 𝐍𝐮𝐦𝐛𝐞𝐫𝐬 (𝟏-𝟐𝟒𝟖) 𝐨𝐫 𝐄𝐦𝐨𝐭𝐞 𝐍𝐚𝐦𝐞𝐬 𝐭𝐨 𝐝𝐚𝐧𝐜𝐞!\n👑 𝐓𝐡𝐢𝐬 𝐛𝐨𝐭 𝐰𝐚𝐬 𝐜𝐫𝐞𝐚𝐭𝐞𝐝 & 𝐝𝐞𝐯𝐞𝐥𝐨𝐩𝐞𝐝 𝐛𝐲 @𝐚𝐝𝟎𝐫𝐢 😉\n📺 𝐒𝐮𝐛𝐬𝐜𝐫𝐢𝐛𝐞 𝐭𝐨 𝐨𝐮𝐫 𝐘𝐨𝐮𝐓𝐮𝐛𝐞: @𝐚𝐝𝐨𝐫𝐢_𝐡𝐢𝐭𝐨𝐭𝐬𝐨 🚀",
+    "welcome_message": "✨ 🌟 𝐖𝐞𝐥𝐜𝐨𝐦𝐞 {username} ❤️ 𝐆𝐥𝐚𝐝 𝐭𝐨 𝐡𝐚𝐯𝐞 𝐲𝐨𝐮 𝐡𝐞𝐫𝐞!\n🕺 𝐔𝐬𝐞 𝐍𝐮𝐦𝐛𝐞𝐫𝐬 (𝟏-𝟐𝟓𝟔) 𝐨𝐫 𝐄𝐦𝐨𝐭𝐞 𝐍𝐚𝐦𝐞𝐬 𝐭𝐨 𝐝𝐚𝐧𝐜𝐞!\n👑 𝐓𝐡𝐢𝐬 𝐛𝐨𝐭 𝐰𝐚𝐬 𝐜𝐫𝐞𝐚𝐭𝐞𝐝 & 𝐝𝐞𝐯𝐞𝐥𝐨𝐩𝐞𝐝 𝐛𝐲 @𝐚𝐝𝟎𝐫𝐢 😉\n📺 𝐒𝐮𝐛𝐬𝐜𝐫𝐢𝐛𝐞 𝐭𝐨 𝐨𝐮𝐫 𝐘𝐨𝐮𝐓𝐮𝐛𝐞: @𝐚𝐝𝐨𝐫𝐢_𝐡𝐢𝐭𝐨𝐭𝐬𝐨 🚀",
     "announcement_interval": 300,
     "announcement_message": "برای اجاره بات به آیدی @ad0ri پیام دهید!"
 }
@@ -86,6 +87,7 @@ class AdvancedBot(BaseBot):
             "!party": self.cmd_party,
             "!partys": self.cmd_partys,
             "!emotebot": self.cmd_emotebot,
+            "!emote": self.cmd_emote_link,
             "!loopchat": self.cmd_loopchat
         }
         self.emotes = {
@@ -339,6 +341,12 @@ class AdvancedBot(BaseBot):
             "248": "emote-knocking-screen",
             "249": "emote-alice-shrink",
             "250": "emote-threadexchange-star",
+            "251": "emote-inside-out",
+            "252": "emote-collab-photo-right",
+            "253": "emote-afk-idle",
+            "254": "emote-meditate-idle",
+            "255": "emote-sixseve-noimg",
+            "256": "emote-sixseven",
             "۱": "idle_zombie",
             "۲": "idle_layingdown2",
             "۳": "idle_layingdown",
@@ -589,6 +597,12 @@ class AdvancedBot(BaseBot):
             "۲۴۸": "emote-knocking-screen",
             "۲۴۹": "emote-alice-shrink",
             "۲۵۰": "emote-threadexchange-star",
+            "۲۵۱": "emote-inside-out",
+            "۲۵۲": "emote-collab-photo-right",
+            "۲۵۳": "emote-afk-idle",
+            "۲۵۴": "emote-meditate-idle",
+            "۲۵۵": "emote-sixseve-noimg",
+            "۲۵۶": "emote-sixseven",
             "zombie": "idle_zombie",
             "relaxed": "idle_layingdown2",
             "attentive": "idle_layingdown",
@@ -812,7 +826,12 @@ class AdvancedBot(BaseBot):
             "floss": "dance-floss",
             "rest": "sit-idle-cute",
             "aliceshrink": "emote-alice-shrink",
-            "threadexchangestar": "emote-threadexchange-star"
+            "threadexchangestar": "emote-threadexchange-star",
+            "insideout": "emote-inside-out",
+            "collabphoto": "emote-collab-photo-right",
+            "afk": "emote-afk-idle",
+            "meditate": "emote-meditate-idle",
+            "sixseven": "emote-sixseven"
         }
 
         self.emote_durations = {
@@ -1039,7 +1058,13 @@ class AdvancedBot(BaseBot):
             "dance-floss": 11.0,
             "emote-dead": 6.0,
             "emote-alice-shrink": 15.0,
-            "emote-threadexchange-star": 15.0
+            "emote-threadexchange-star": 15.0,
+            "emote-inside-out": 15.0,
+            "emote-collab-photo-right": 15.0,
+            "emote-afk-idle": 15.0,
+            "emote-meditate-idle": 15.0,
+            "emote-sixseve-noimg": 15.0,
+            "emote-sixseven": 15.0
         }
 
     def is_host(self, username: str) -> bool:
@@ -1326,7 +1351,7 @@ class AdvancedBot(BaseBot):
             "سلام عزیز! ❤️\n\n"
             "🤖 من یک ربات پیشرفته و فول امکانات برای مدیریت و ارتقای روم هستم!\n\n"
             "✨ **بخشی از قابلیت‌های خفن من:**\n"
-            "🔹 دارای ۲۴۸ دنس جذاب و فعال با تکرار همیشگی و بدون حتی ۱ ثانیه تاخیر! 💃\n"
+            "🔹 دارای ۲۵۶ دنس جذاب و فعال با تکرار همیشگی و بدون حتی ۱ ثانیه تاخیر! 💃\n"
             "🔹 سیستم خوش‌آمدگویی هوشمند و خودکار به محض ورود پلیرها 🚪\n"
             "🔹 قابلیت رقص همگانی و پارتی خودکار برای کل اعضای روم 🕺\n"
             "🔹 امنیت بالا و مدیریت کامل ادمین‌ها و دستورات اختصاصی 🛠️\n"
@@ -1392,6 +1417,51 @@ class AdvancedBot(BaseBot):
             
            
 
+    async def cmd_emote_link(self, user: User, parts: list):
+        """
+        !emote <لینک> - اجرای هر دنسی مستقیماً از روی لینک high.rs، بدون نیاز به
+        اضافه کردن دستی آن دنس به لیست self.emotes.
+        مثال: !emote https://high.rs/item?id=emote-alice-shrink&type=emote
+        """
+        if len(parts) < 2:
+            await self.highrise.chat("⚠️ لطفاً لینک دنس را بعد از دستور وارد کنید.\nمثال: !emote https://high.rs/item?id=emote-xxx&type=emote")
+            return
+
+        link = parts[1].strip()
+        emote_id = None
+        try:
+            if link.startswith("http://") or link.startswith("https://"):
+                parsed = urlparse(link)
+                query = parse_qs(parsed.query)
+                emote_id = query.get("id", [None])[0]
+            elif link.startswith("id=") or "id=" in link:
+                # حالتی که فقط بخش id=... کپی شده باشد، بدون کل لینک
+                query = parse_qs(link)
+                emote_id = query.get("id", [None])[0]
+            else:
+                # حالتی که کاربر فقط خودِ آیدی دنس رو بدون لینک بفرسته
+                emote_id = link
+        except Exception as e:
+            logger.error(f"خطا در پارس لینک !emote از {user.username}: {e}")
+            emote_id = None
+
+        if not emote_id:
+            await self.highrise.chat("❌ لینک نامعتبر است! باید شامل id=... باشد.")
+            logger.info(f"لینک نامعتبر برای !emote توسط {user.username}: {link}")
+            return
+
+        # تست اجرای دنس قبل از قفل کردن روی حالت تکرار، تا اگه آیدی اشتباه بود سریع بهت خبر بده
+        try:
+            await self.highrise.send_emote(emote_id, user.id)
+        except Exception as e:
+            await self.highrise.chat(f"❌ اجرای دنس [{emote_id}] با خطا مواجه شد. احتمالاً آیدی دنس اشتباه است یا این آیتم دنس نیست.")
+            logger.error(f"خطا در اجرای !emote برای {emote_id} توسط {user.username}: {e}")
+            return
+
+        await self.start_dance(user, emote_id)
+        await self.highrise.chat(f"✅ دنس [{emote_id}] شروع و قفل شد! برای توقف بنویسید: stop")
+        logger.info(f"کاربر {user.username} دنس دلخواه {emote_id} را از طریق لینک اجرا کرد.")
+
     async def cmd_help(self, user: User, parts: list):
         help_text = (
             "دستورات ربات:\n"
@@ -1430,6 +1500,7 @@ class AdvancedBot(BaseBot):
             "!addadmin @username - افزودن ادمین (فقط Host)\n"
             "!removeadmin @username - حذف ادمین (فقط Host)\n"
             "!emotebot نام/شماره_دنس - تغییر دنس مداوم ربات (فقط ادمین)\n"
+            "!emote لینک_دنس - اجرای هر دنسی از روی لینک high.rs (بدون نیاز به اضافه شدن قبلی)\n"
             "!loopchat پیام - تنظیم پیام تکرارشونده/اسپم ربات (فقط ادمین)\n"
             "!listadd - نمایش لیست ادمین‌ها\n"
             "!freeze @username - فریز کردن کاربر\n"
@@ -2713,8 +2784,8 @@ async def main():
     from http.server import BaseHTTPRequestHandler, HTTPServer
     
     logger.info("تلاش برای بارگذاری متغیرهای محیطی...")
-    room_id = os.getenv("ROOM_ID", "68e771922d585712212e8070")
-    api_token = os.getenv("API_TOKEN", "ed578ca3bb6a6592059a878e4d807d0c7eac56742239fdcce7ca84841f2437e5")
+    room_id = os.getenv("ROOM_ID", "6ad0034a831015ebf5a8467e")
+    api_token = os.getenv("API_TOKEN", "9e7c0961d04f51d5c9261b216f4367cc6f8b063fab79ad190adb40020498757c")
     
     if not room_id or not api_token:
         logger.error("ROOM_ID یا API_TOKEN تنظیم نشده‌اند.")
