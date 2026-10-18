@@ -11,6 +11,52 @@ from datetime import datetime, timedelta
 import random
 import aiohttp
 
+# الإعدادات كلها موجودة في ملف settings.py
+from settings import (
+    QUIZ_TIMEOUT,
+    QUIZ_SCORES_FILE,
+    QUIZ_COLOR_QUESTION,
+    QUIZ_COLOR_ANSWER,
+    QUIZ_EMOTE_THINK,
+    QUIZ_EMOTE_HAPPY,
+    QUIZ_EMOTE_SAD,
+    QUIZ_INTROS,
+    QUIZ_CORRECT,
+    QUIZ_TIMEOUT_MSG,
+    QUIZ_QUESTIONS,
+    QUIZ_DEFAULT_ROUNDS,
+    START_POSITION,
+    ROOM_ID,
+    API_TOKEN,
+    MAFIA_MIN_PLAYERS,
+    MAFIA_MAX_PLAYERS,
+    MAFIA_JOIN_TIME,
+    MAFIA_NIGHT_TIME,
+    MAFIA_DAY_TIME,
+    MAFIA_VOTE_TIME,
+    MAFIA_WIN_POINTS,
+    MAFIA_COLOR_TITLE,
+    MAFIA_COLOR_NIGHT,
+    MAFIA_COLOR_DAY,
+    MAFIA_COLOR_VOTE,
+    MAFIA_COLOR_MAFIA,
+    MAFIA_COLOR_GOOD,
+    MAFIA_COLOR_DOCTOR,
+    MAFIA_COLOR_DETECTIVE,
+    MAFIA_EMOTE_DAY,
+    MAFIA_EMOTE_NIGHT,
+    MAFIA_EMOTE_KILL,
+    MAFIA_EMOTE_SAVED,
+    MAFIA_EMOTE_VOTE_OUT,
+    MAFIA_EMOTE_TIE,
+    MAFIA_EMOTE_WIN_MAFIA,
+    MAFIA_EMOTE_WIN_GOOD,
+    MAFIA_EMOTE_PLAYER_DEATH,
+    MAFIA_EMOTE_PLAYER_OUT,
+    MAFIA_EMOTE_PLAYER_WIN,
+    MAFIA_ROLE_NAMES,
+)
+
 # إعداد التسجيل (Logging)
 logging.basicConfig(
     level=logging.INFO,
@@ -41,25 +87,6 @@ DEFAULT_CONFIG = {
     "announcement_message": "لاستئجار البوت، راسلوا @RQTM!"
 }
 
-# الإعدادات كلها موجودة في ملف settings.py
-from settings import (
-    QUIZ_TIMEOUT,
-    QUIZ_SCORES_FILE,
-    QUIZ_COLOR_QUESTION,
-    QUIZ_COLOR_ANSWER,
-    QUIZ_EMOTE_THINK,
-    QUIZ_EMOTE_HAPPY,
-    QUIZ_EMOTE_SAD,
-    QUIZ_INTROS,
-    QUIZ_CORRECT,
-    QUIZ_TIMEOUT_MSG,
-    QUIZ_QUESTIONS,
-    QUIZ_DEFAULT_ROUNDS,
-    START_POSITION,
-    ROOM_ID,
-    API_TOKEN,
-)
-
 class AdvancedBot(BaseBot):
     def __init__(self):
         super().__init__()
@@ -80,6 +107,8 @@ class AdvancedBot(BaseBot):
         self.quiz_session = {}
         self.quiz_think_task = None
         self.bot_emote_name = None
+        self.mafia = None
+        self.mafia_task = None
         self.quiz_scores = {}
         self.load_quiz_scores()
         self.commands = {
@@ -118,6 +147,14 @@ class AdvancedBot(BaseBot):
             "!emotebot": self.cmd_emotebot,
             "!emote": self.cmd_emote_link,
             "!loopchat": self.cmd_loopchat,
+            "!mafia": self.cmd_mafia,
+            "!مافيا": self.cmd_mafia,
+            "!join": self.cmd_mafia_join,
+            "!دخول": self.cmd_mafia_join,
+            "!vote": self.cmd_mafia_vote,
+            "!صوت": self.cmd_mafia_vote,
+            "!mafiastop": self.cmd_mafia_stop,
+            "!ايقاف_المافيا": self.cmd_mafia_stop,
             "!quiz": self.cmd_quiz,
             "!مسابقة": self.cmd_quiz,
             "!quizstop": self.cmd_quizstop,
@@ -1225,6 +1262,10 @@ class AdvancedBot(BaseBot):
             if self.quiz_think_task and not self.quiz_think_task.done():
                 self.quiz_think_task.cancel()
             self.quiz_think_task = None
+            if self.mafia_task and not self.mafia_task.done():
+                self.mafia_task.cancel()
+            self.mafia_task = None
+            self.mafia = None
             
             for username, task in self.frozen_users.items():
                 if not task.done():
@@ -1294,6 +1335,13 @@ class AdvancedBot(BaseBot):
         username = user.username.lower()
         self.active_users.pop(username, None)
         self.user_positions.pop(username, None)
+        if self.mafia and username in self.mafia["players"]:
+            if self.mafia["phase"] == "lobby":
+                self.mafia["players"].pop(username, None)
+            elif self.mafia["players"][username]["alive"]:
+                self.mafia["players"][username]["alive"] = False
+                create_task(self.mafia_say(f"🏃 @{user.username} طلع من الغرفة وانسحب من اللعبة!", MAFIA_COLOR_MAFIA))
+                self.mafia_check_events()
         if username in self.dance_tasks:
             self.dance_tasks[username].cancel()
             self.dance_tasks.pop(username, None)
@@ -1683,6 +1731,9 @@ class AdvancedBot(BaseBot):
         if self.quiz_task and not self.quiz_task.done():
             await self.highrise.chat("⚠️ المسابقة شغالة هسه! اكتب !quizstop إذا تريد توقفها.")
             return
+        if self.mafia:
+            await self.highrise.chat("⚠️ لعبة المافيا شغالة هسه، اصبروا لين تخلص!")
+            return
         rounds = QUIZ_DEFAULT_ROUNDS
         if len(parts) > 1:
             try:
@@ -1716,6 +1767,363 @@ class AdvancedBot(BaseBot):
         for index, entry in enumerate(ranking):
             lines.append(f"{medals[index]} @{entry['name']} - {entry['points']} نقطة")
         await self.highrise.chat("\n".join(lines))
+
+    # ====================== لعبة المافيا ======================
+    async def mafia_say(self, text, color=""):
+        chunk = ""
+        for line in text.split("\n"):
+            if chunk and len(chunk) + len(line) + 1 > 230:
+                await self.highrise.chat(color + chunk)
+                chunk = ""
+                await sleep(0.5)
+            chunk = (chunk + "\n" + line) if chunk else line
+        if chunk:
+            await self.highrise.chat(color + chunk)
+
+    async def mafia_whisper(self, player, text, color=""):
+        try:
+            await self.highrise.send_whisper(player["user"].id, (color + text)[:250])
+        except Exception as e:
+            logger.error(f"خطأ في إرسال همس المافيا إلى {player['user'].username}: {e}")
+
+    async def mafia_emote_user(self, player, emote):
+        try:
+            await self.highrise.send_emote(emote, player["user"].id)
+        except Exception as e:
+            logger.error(f"خطأ في حركة لاعب المافيا: {e}")
+
+    def mafia_alive(self):
+        return [p for p in self.mafia["players"].values() if p["alive"]]
+
+    def mafia_by_num(self, num):
+        return next((p for p in self.mafia["players"].values() if p["num"] == num and p["alive"]), None)
+
+    def mafia_list_text(self):
+        alive = sorted(self.mafia_alive(), key=lambda p: p["num"])
+        return "  ".join(f"{p['num']}-{p['user'].username}" for p in alive)
+
+    def mafia_assign(self):
+        g = self.mafia
+        players = list(g["players"].values())
+        for number, p in enumerate(players, 1):
+            p["num"] = number
+        random.shuffle(players)
+        n = len(players)
+        mafia_count = 1 if n < 7 else (2 if n < 12 else 3)
+        roles = ["mafia"] * mafia_count + ["doctor", "detective"]
+        roles += ["citizen"] * (n - len(roles))
+        for p, role in zip(players, roles):
+            p["role"] = role
+
+    def mafia_winner(self):
+        alive = self.mafia_alive()
+        mafia_alive = len([p for p in alive if p["role"] == "mafia"])
+        others = len(alive) - mafia_alive
+        if mafia_alive == 0:
+            return "citizens"
+        if mafia_alive >= others:
+            return "mafia"
+        return None
+
+    def mafia_night_done(self):
+        g = self.mafia
+        n = g["night"]
+        if n["kill"] is None:
+            return False
+        for p in self.mafia_alive():
+            if p["role"] == "doctor" and n["save"] is None:
+                return False
+            if p["role"] == "detective" and not n.get("checked"):
+                return False
+        return True
+
+    def mafia_check_events(self):
+        g = self.mafia
+        if not g or not g.get("event"):
+            return
+        if g["phase"] == "night" and self.mafia_night_done():
+            g["event"].set()
+        elif g["phase"] == "vote":
+            alive_names = {p["user"].username.lower() for p in self.mafia_alive()}
+            if alive_names and alive_names.issubset(set(g["votes"].keys())):
+                g["event"].set()
+
+    async def run_mafia(self):
+        g = self.mafia
+        resume_emote = self.bot_emote_name
+        if self.user_id in self.dance_tasks:
+            self.dance_tasks[self.user_id].cancel()
+            self.dance_tasks.pop(self.user_id, None)
+        try:
+            await self.bot_play_emote(MAFIA_EMOTE_DAY)
+            await self.mafia_say(
+                f"🎭 لعبة المافيا بدت!\nاكتبوا !join أو !دخول للمشاركة ({MAFIA_MIN_PLAYERS}-{MAFIA_MAX_PLAYERS} لاعبين)\n⏳ عدكم {MAFIA_JOIN_TIME} ثانية",
+                MAFIA_COLOR_TITLE)
+            await sleep(MAFIA_JOIN_TIME / 2)
+            await self.mafia_say(f"📢 للحين {len(g['players'])} لاعب! اكتبوا !join للدخول", MAFIA_COLOR_TITLE)
+            await sleep(MAFIA_JOIN_TIME / 2)
+            if len(g["players"]) < MAFIA_MIN_PLAYERS:
+                await self.mafia_say(f"😕 ما كملوا {MAFIA_MIN_PLAYERS} لاعبين، انلغت اللعبة!", MAFIA_COLOR_MAFIA)
+                return
+
+            g["phase"] = "starting"
+            self.mafia_assign()
+            n_mafia = len([p for p in g["players"].values() if p["role"] == "mafia"])
+            await self.mafia_say(
+                f"🎬 تبدي اللعبة! {len(g['players'])} لاعبين، بيناتهم {n_mafia} مافيا 😈\n"
+                f"افتحوا الهمس (Whisper) مع البوت، وصلكم دوركم بالخاص 🤫\n{self.mafia_list_text()}",
+                MAFIA_COLOR_TITLE)
+            role_info = {
+                "mafia": (MAFIA_COLOR_MAFIA, "🔪 دورك: مافيا! كل ليلة اهمس للبوت: kill رقم"),
+                "doctor": (MAFIA_COLOR_DOCTOR, "💉 دورك: دكتور! كل ليلة اهمس للبوت: save رقم لتنقذ واحد"),
+                "detective": (MAFIA_COLOR_DETECTIVE, "🕵️ دورك: محقق! كل ليلة اهمس للبوت: check رقم لتكشف واحد"),
+                "citizen": (MAFIA_COLOR_GOOD, "👤 دورك: مواطن! ناقشوا وصوتوا ع المافيا بالنهار"),
+            }
+            mafia_names = ", ".join(f"@{p['user'].username}" for p in g["players"].values() if p["role"] == "mafia")
+            for p in g["players"].values():
+                color, text = role_info[p["role"]]
+                await self.mafia_whisper(p, text, color)
+                if p["role"] == "mafia" and n_mafia > 1:
+                    await self.mafia_whisper(p, f"😈 المافيا: {mafia_names}", MAFIA_COLOR_MAFIA)
+                await sleep(0.4)
+            await sleep(6)
+
+            rnd = 0
+            winner = None
+            while not winner:
+                rnd += 1
+                await self.mafia_night(rnd)
+                winner = self.mafia_winner()
+                if winner:
+                    break
+                await self.mafia_day()
+                winner = self.mafia_winner()
+            await self.mafia_finish(winner)
+        except CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"خطأ في لعبة المافيا: {e}", exc_info=True)
+        finally:
+            self.mafia = None
+            await self.stop_quiz_think()
+            if resume_emote:
+                self.start_bot_emote_loop(resume_emote)
+
+    async def mafia_night(self, rnd):
+        g = self.mafia
+        g["phase"] = "night"
+        g["night"] = {"kill": None, "save": None, "checked": False}
+        g["event"] = asyncio.Event()
+        await self.bot_play_emote(MAFIA_EMOTE_NIGHT)
+        await self.mafia_say(
+            f"🌙 نزل الليل (الجولة {rnd})... الكل ينام 😴\n"
+            f"المافيا والدكتور والمحقق شوفوا الهمس 🤫\nالأحياء: {self.mafia_list_text()}",
+            MAFIA_COLOR_NIGHT)
+        for p in self.mafia_alive():
+            if p["role"] == "mafia":
+                await self.mafia_whisper(p, f"🔪 منو تقتل؟ اهمس: kill رقم\n{self.mafia_list_text()}", MAFIA_COLOR_MAFIA)
+            elif p["role"] == "doctor":
+                await self.mafia_whisper(p, f"💉 منو تنقذ؟ اهمس: save رقم\n{self.mafia_list_text()}", MAFIA_COLOR_DOCTOR)
+            elif p["role"] == "detective":
+                await self.mafia_whisper(p, f"🕵️ منو تكشف؟ اهمس: check رقم\n{self.mafia_list_text()}", MAFIA_COLOR_DETECTIVE)
+            await sleep(0.4)
+        try:
+            await asyncio.wait_for(g["event"].wait(), timeout=MAFIA_NIGHT_TIME)
+        except asyncio.TimeoutError:
+            pass
+        g["phase"] = "resolve"
+        n = g["night"]
+        victim = self.mafia_by_num(n["kill"]) if n["kill"] else None
+        if victim and n["save"] == n["kill"]:
+            await self.bot_play_emote(MAFIA_EMOTE_SAVED)
+            await self.mafia_say("☀️ طلع الصبح! المافيا حاولت تقتل واحد بس الدكتور أنقذه 💉🎉 ماكو أحد مات!", MAFIA_COLOR_DOCTOR)
+        elif victim:
+            victim["alive"] = False
+            await self.mafia_emote_user(victim, MAFIA_EMOTE_PLAYER_DEATH)
+            await self.bot_play_emote(MAFIA_EMOTE_KILL)
+            await self.mafia_say(
+                f"☀️ طلع الصبح... 💀 @{victim['user'].username} انقتل بالليل!\nكان {MAFIA_ROLE_NAMES[victim['role']]}",
+                MAFIA_COLOR_MAFIA)
+        else:
+            await self.mafia_say("☀️ طلع الصبح! الليلة عدت بسلام، ماكو أحد انقتل 😮‍💨", MAFIA_COLOR_GOOD)
+        await sleep(3)
+
+    async def mafia_day(self):
+        g = self.mafia
+        g["phase"] = "day"
+        await self.mafia_say(
+            f"💬 وقت النقاش! منو المافيا بيناتكم؟ 🤔 عدكم {MAFIA_DAY_TIME} ثانية\nالأحياء: {self.mafia_list_text()}",
+            MAFIA_COLOR_DAY)
+        self.quiz_think_task = create_task(self.quiz_think_loop())
+        await sleep(MAFIA_DAY_TIME)
+        await self.stop_quiz_think()
+
+        g["phase"] = "vote"
+        g["votes"] = {}
+        g["event"] = asyncio.Event()
+        await self.mafia_say(
+            f"🗳️ وقت التصويت! اكتبوا !vote رقم أو !صوت رقم\n⏳ عدكم {MAFIA_VOTE_TIME} ثانية\n{self.mafia_list_text()}",
+            MAFIA_COLOR_VOTE)
+        try:
+            await asyncio.wait_for(g["event"].wait(), timeout=MAFIA_VOTE_TIME)
+        except asyncio.TimeoutError:
+            pass
+        g["phase"] = "resolve"
+        counts = {}
+        for num in g["votes"].values():
+            counts[num] = counts.get(num, 0) + 1
+        if not counts:
+            await self.mafia_say("😶 ما صوت أحد! ننطي فرصة ثانية، ماكو أحد انطرد.", MAFIA_COLOR_VOTE)
+            return
+        top = max(counts.values())
+        leaders = [num for num, c in counts.items() if c == top]
+        if len(leaders) > 1:
+            await self.bot_play_emote(MAFIA_EMOTE_TIE)
+            await self.mafia_say("⚖️ تعادلت الأصوات! ماكو أحد انطرد هالمرة.", MAFIA_COLOR_VOTE)
+            return
+        out = self.mafia_by_num(leaders[0])
+        if out:
+            out["alive"] = False
+            await self.mafia_emote_user(out, MAFIA_EMOTE_PLAYER_OUT)
+            await self.bot_play_emote(MAFIA_EMOTE_VOTE_OUT)
+            color = MAFIA_COLOR_GOOD if out["role"] == "mafia" else MAFIA_COLOR_MAFIA
+            await self.mafia_say(
+                f"🚪 @{out['user'].username} انطرد بالتصويت ({top} أصوات)!\nكان {MAFIA_ROLE_NAMES[out['role']]}",
+                color)
+        await sleep(3)
+
+    async def mafia_finish(self, winner):
+        g = self.mafia
+        g["phase"] = "ended"
+        players = list(g["players"].values())
+        lines = [f"@{p['user'].username} = {MAFIA_ROLE_NAMES[p['role']]}" for p in players]
+        if winner == "mafia":
+            await self.bot_play_emote(MAFIA_EMOTE_WIN_MAFIA)
+            await self.mafia_say("😈🔪 فازت المافيا! سيطروا ع المدينة!", MAFIA_COLOR_MAFIA)
+            winners = [p for p in players if p["role"] == "mafia"]
+        else:
+            await self.bot_play_emote(MAFIA_EMOTE_WIN_GOOD)
+            await self.mafia_say("🎉 فاز المواطنين! خلصنا من المافيا كلها 👏", MAFIA_COLOR_GOOD)
+            winners = [p for p in players if p["role"] != "mafia"]
+        await sleep(2)
+        await self.mafia_say("🎭 الأدوار:\n" + "\n".join(lines), MAFIA_COLOR_TITLE)
+        for p in winners:
+            await self.mafia_emote_user(p, MAFIA_EMOTE_PLAYER_WIN)
+            entry = self.quiz_scores.setdefault(p["user"].username.lower(), {"name": p["user"].username, "points": 0})
+            entry["name"] = p["user"].username
+            entry["points"] += MAFIA_WIN_POINTS
+            await sleep(0.3)
+        self.save_quiz_scores()
+        await self.mafia_say(f"🏅 الفايزين أخذوا {MAFIA_WIN_POINTS} نقطة لكل واحد (شوفوا !top)", MAFIA_COLOR_TITLE)
+
+    async def mafia_handle_whisper(self, user, message):
+        g = self.mafia
+        if not g or g["phase"] != "night":
+            return
+        p = g["players"].get(user.username.lower())
+        if not p or not p["alive"]:
+            return
+        parts = message.strip().lstrip("!").split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            return
+        cmd = parts[0].lower()
+        target = self.mafia_by_num(int(parts[1]))
+        if not target:
+            await self.mafia_whisper(p, "❌ هذا الرقم مو صحيح أو صاحبه ميت!")
+            return
+        n = g["night"]
+        role = p["role"]
+        if role == "mafia" and cmd in ("kill", "قتل", "اقتل"):
+            if target["role"] == "mafia":
+                await self.mafia_whisper(p, "😅 ما تقتل واحد من جماعتك!", MAFIA_COLOR_MAFIA)
+                return
+            n["kill"] = target["num"]
+            await self.mafia_whisper(p, f"🔪 اخترت تقتل {target['num']}-{target['user'].username}", MAFIA_COLOR_MAFIA)
+            for mate in self.mafia_alive():
+                if mate["role"] == "mafia" and mate is not p:
+                    await self.mafia_whisper(mate, f"🔪 {user.username} اختار يقتل {target['num']}-{target['user'].username}", MAFIA_COLOR_MAFIA)
+        elif role == "doctor" and cmd in ("save", "انقاذ", "إنقاذ", "انقذ", "احمي"):
+            n["save"] = target["num"]
+            await self.mafia_whisper(p, f"💉 اخترت تنقذ {target['num']}-{target['user'].username}", MAFIA_COLOR_DOCTOR)
+        elif role == "detective" and cmd in ("check", "كشف", "اكشف"):
+            if n.get("checked"):
+                await self.mafia_whisper(p, "🕵️ كشفت وحده هالليلة!", MAFIA_COLOR_DETECTIVE)
+                return
+            n["checked"] = True
+            if target["role"] == "mafia":
+                await self.mafia_whisper(p, f"🕵️ {target['user'].username} هو مافيا! 🔪", MAFIA_COLOR_MAFIA)
+            else:
+                await self.mafia_whisper(p, f"🕵️ {target['user'].username} بريء ✅", MAFIA_COLOR_GOOD)
+        else:
+            return
+        self.mafia_check_events()
+
+    async def on_whisper(self, user: User, message: str):
+        try:
+            await self.mafia_handle_whisper(user, message)
+        except Exception as e:
+            logger.error(f"خطأ في معالجة همس من {user.username}: {e}")
+
+    async def cmd_mafia(self, user: User, parts: list):
+        if user.username.lower() not in self.config["admin_usernames"]:
+            await self.highrise.chat(self.get_message("no_permission"))
+            return
+        if self.mafia or (self.mafia_task and not self.mafia_task.done()):
+            await self.highrise.chat("⚠️ لعبة المافيا شغالة هسه!")
+            return
+        if self.quiz_task and not self.quiz_task.done():
+            await self.highrise.chat("⚠️ المسابقة شغالة هسه، اصبروا لين تخلص!")
+            return
+        self.mafia = {"phase": "lobby", "players": {}, "night": {}, "votes": {}, "event": None}
+        self.mafia_task = create_task(self.run_mafia())
+        logger.info(f"بدأ {user.username} لعبة المافيا.")
+
+    async def cmd_mafia_join(self, user: User, parts: list):
+        g = self.mafia
+        if not g or g["phase"] != "lobby":
+            return
+        key = user.username.lower()
+        if key == (self.config.get("bot_username") or "").lower() or user.id == self.user_id:
+            return
+        if key in g["players"]:
+            await self.highrise.chat(f"@{user.username} انت مشترك من قبل 😉")
+            return
+        if len(g["players"]) >= MAFIA_MAX_PLAYERS:
+            await self.highrise.chat("🚫 اللعبة امتلت!")
+            return
+        g["players"][key] = {"user": user, "role": None, "alive": True, "num": 0}
+        await self.highrise.chat(f"{MAFIA_COLOR_GOOD}✅ @{user.username} دخل اللعبة! ({len(g['players'])} لاعبين)")
+
+    async def cmd_mafia_vote(self, user: User, parts: list):
+        g = self.mafia
+        if not g or g["phase"] != "vote":
+            return
+        p = g["players"].get(user.username.lower())
+        if not p or not p["alive"]:
+            return
+        if len(parts) < 2 or not parts[1].isdigit():
+            await self.highrise.chat(f"{MAFIA_COLOR_VOTE}@{user.username} اكتب: !vote رقم")
+            return
+        target = self.mafia_by_num(int(parts[1]))
+        if not target:
+            await self.highrise.chat(f"{MAFIA_COLOR_VOTE}@{user.username} هذا الرقم مو صحيح أو صاحبه ميت!")
+            return
+        if target is p:
+            await self.highrise.chat(f"{MAFIA_COLOR_VOTE}@{user.username} ما تقدر تصوت ع نفسك 😅")
+            return
+        g["votes"][user.username.lower()] = target["num"]
+        await self.highrise.chat(f"{MAFIA_COLOR_VOTE}🗳️ @{user.username} صوّت ✅")
+        self.mafia_check_events()
+
+    async def cmd_mafia_stop(self, user: User, parts: list):
+        if user.username.lower() not in self.config["admin_usernames"]:
+            await self.highrise.chat(self.get_message("no_permission"))
+            return
+        if self.mafia_task and not self.mafia_task.done():
+            self.mafia_task.cancel()
+            await self.highrise.chat(f"{MAFIA_COLOR_MAFIA}🛑 انوقفت لعبة المافيا!")
+        else:
+            await self.highrise.chat("ماكو لعبة مافيا شغالة هسه.")
 
     async def cmd_help(self, user: User, parts: list):
         help_text = (
@@ -1766,7 +2174,10 @@ class AdvancedBot(BaseBot):
             "!partys @username - إيقاف الرقص الإجباري للمستخدم\n"
             "!quiz [العدد] - بدء مسابقة المعلومات (للمشرفين)\n"
             "!quizstop - إيقاف المسابقة (للمشرفين)\n"
-            "!top - عرض المتصدرين\n\n"
+            "!top - عرض المتصدرين\n"
+            "!mafia - بدء لعبة المافيا (للمشرفين)\n"
+            "!join - الدخول للعبة | !vote رقم - التصويت\n"
+            "!mafiastop - إيقاف المافيا (للمشرفين)\n\n"
             "📩 لمزيد من المعلومات راسل @RQTM!"
         )
         for chunk in [help_text[i:i+200] for i in range(0, len(help_text), 200)]:

@@ -12,7 +12,7 @@ API_TOKEN = "141f12ef1088550ac7242bb95305ee69e9f352b75c79b59cc4f7dca3b5bb02f9"
 
 # ------------------------- 📍 مكان البوت -------------------------
 # مكان البوت لما يدخل الغرفة. (الأمر !setstart داخل الغرفة يتقدم على هذا القيمة)
-START_POSITION = {"x": 11.0, "y": 7.0, "z": 11.0}
+START_POSITION = {"x": 16.5, "y": 0.25, "z": 3.5}
 
 # ------------------------- 🧠 المسابقة -------------------------
 # عدد الأسئلة إذا المشرف كتب !quiz بدون رقم
@@ -95,3 +95,46 @@ QUIZ_QUESTIONS = [
     ("لغز: شنو اللي كل ما نقصنا منه يكبر؟", ["الحفرة", "حفرة"]),
     ("لغز: شنو اللي يمشي بلا رجلين ويبجي بلا عيون؟", ["الغيمة", "غيمة", "السحابة", "سحابة", "الغيم"]),
 ]
+
+
+# =====================================================================
+# 🎭 لعبة المافيا  (!mafia)
+# =====================================================================
+MAFIA_MIN_PLAYERS = 4       # أقل عدد لاعبين
+MAFIA_MAX_PLAYERS = 20      # أكثر عدد لاعبين
+MAFIA_JOIN_TIME = 45        # ثواني التسجيل
+MAFIA_NIGHT_TIME = 40       # ثواني الليل (ينتهي أبكر إذا الكل سوى حركته)
+MAFIA_DAY_TIME = 45         # ثواني النقاش
+MAFIA_VOTE_TIME = 25        # ثواني التصويت
+MAFIA_WIN_POINTS = 2        # نقاط الفايزين (تنضاف لنقاط !top)
+
+# 🎨 الألوان
+MAFIA_COLOR_TITLE = "<#FFD700>"     # ذهبي: عناوين وتسجيل
+MAFIA_COLOR_NIGHT = "<#6C8CFF>"     # أزرق: الليل
+MAFIA_COLOR_DAY = "<#FFA500>"       # برتقالي: النهار والنقاش
+MAFIA_COLOR_VOTE = "<#FF69B4>"      # وردي: التصويت
+MAFIA_COLOR_MAFIA = "<#FF0000>"     # أحمر: المافيا والقتل
+MAFIA_COLOR_GOOD = "<#00FF00>"      # أخضر: المواطنين والفوز
+MAFIA_COLOR_DOCTOR = "<#00FFFF>"    # سماوي: الدكتور
+MAFIA_COLOR_DETECTIVE = "<#B57BFF>" # بنفسجي: المحقق
+
+# 💃 حركات البوت واللاعبين
+MAFIA_EMOTE_DAY = "emote-hello"          # بداية النهار/اللعبة
+MAFIA_EMOTE_NIGHT = "idle-sleep"         # البوت ينام بالليل
+MAFIA_EMOTE_KILL = "emote-maniac"        # البوت لما أحد ينقتل
+MAFIA_EMOTE_SAVED = "emoji-celebrate"    # البوت لما الدكتور ينقذ
+MAFIA_EMOTE_VOTE_OUT = "emote-judochop"  # البوت لما أحد ينطرد بالتصويت
+MAFIA_EMOTE_TIE = "emote-confused"       # البوت إذا تعادلت الأصوات
+MAFIA_EMOTE_WIN_MAFIA = "emote-maniac"   # البوت إذا فازت المافيا
+MAFIA_EMOTE_WIN_GOOD = "emoji-celebrate" # البوت إذا فاز المواطنين
+MAFIA_EMOTE_PLAYER_DEATH = "emote-death2"    # اللاعب اللي ينقتل بالليل
+MAFIA_EMOTE_PLAYER_OUT = "emote-deathdrop"   # اللاعب اللي ينطرد بالتصويت
+MAFIA_EMOTE_PLAYER_WIN = "emote-hyped"       # اللاعبين الفايزين
+
+# 🎭 أسماء الأدوار
+MAFIA_ROLE_NAMES = {
+    "mafia": "🔪 مافيا",
+    "doctor": "💉 دكتور",
+    "detective": "🕵️ محقق",
+    "citizen": "👤 مواطن",
+}
