@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timedelta
 import random
 import aiohttp
+from contextvars import ContextVar
 
 # الإعدادات كلها موجودة في ملف settings.py
 from settings import (
@@ -28,6 +29,8 @@ from settings import (
     START_POSITION,
     ROOM_ID,
     API_TOKEN,
+    HELP_LANGUAGE,
+    PUBLIC_COMMAND_HINT,
     MAFIA_MIN_PLAYERS,
     MAFIA_MAX_PLAYERS,
     MAFIA_JOIN_TIME,
@@ -57,6 +60,8 @@ from settings import (
     MAFIA_ROLE_NAMES,
 )
 
+from help_texts import HELP_TEXTS
+
 # إعداد التسجيل (Logging)
 logging.basicConfig(
     level=logging.INFO,
@@ -67,6 +72,14 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# 🔒 Komut cevabının nereye gideceğini tutar:
+#   None            -> genel sohbet (oyunlar, duyurular vb.)
+#   {"kind": ...}   -> fısıltı veya özel mesaj (komut cevapları)
+_reply_ctx = ContextVar("reply_ctx", default=None)
+
+# Mafya oyununda geceleyin fısıldanan aksiyon kelimeleri
+MAFIA_NIGHT_VERBS = {"kill", "قتل", "اقتل", "save", "انقاذ", "إنقاذ", "انقذ", "احمي", "check", "كشف", "اكشف"}
 
 # الإعدادات الافتراضية
 CONFIG_FILE = "bot_config.json"
@@ -108,6 +121,9 @@ class AdvancedBot(BaseBot):
         self.bot_emote_name = None
         self.mafia = None
         self.mafia_task = None
+        self.help_state = {}
+        self.hint_sent = {}
+        self.dm_seen = []
         self.quiz_scores = {}
         self.load_quiz_scores()
         self.commands = {
@@ -1449,43 +1465,57 @@ class AdvancedBot(BaseBot):
             elif msg_lower in ["المطور", "مطور", "creature", "creator", "مالك", "مطور البوت", "صاحب البوت"]:
                 await self.highrise.chat("👑 مطوّر هذا البوت: @RQTM 👑")
             elif msg_lower.startswith("!"):
-                parts = msg.split()
-                parts_lower = [p.lower() for p in parts]
-                cmd = parts_lower[0] if len(parts_lower) == 1 else ("!item set" if parts_lower[0] == "!item" else parts_lower[0])
-                if cmd in self.commands:
-                    await self.commands[cmd](user, parts)
-                else:
-                    await self.highrise.chat(self.get_message("invalid_command"))
+                # 🔒 Komutlar genel sohbette çalışmaz; sadece fısıltı veya özel mesajla çalışır
+                await self.public_command_hint(user)
         except Exception as e:
             logger.error(f"خطأ في on_chat من {username}: {e}")
 
-    async def on_message(self, user_id: str, text: str, message_id: str) -> None:
-        logger.info(f"📥 رسالة خاصة جديدة من المستخدم [{user_id}]: {text}")
-        
-        # ⛔ منع الرد على رسائل البوت نفسه
-        if user_id == self.user_id:
-            return
-
-        # 👑 نص دعائي لتعريف مميزات البوت مع معلومات الإيجار
-        auto_reply = (
-            "أهلاً بك يا عزيزي! ❤️\n\n"
-            "🤖 أنا بوت متطور ومتكامل لإدارة الغرفة والارتقاء بها!\n\n"
-            "✨ **بعض مميزاتي الرائعة:**\n"
-            "🔹 يحتوي على ٢٥٦ رقصة جذابة تعمل بتكرار دائم وبدون أي تأخير ولو لثانية واحدة! 💃\n"
-            "🔹 نظام ترحيب ذكي وتلقائي بمجرد دخول اللاعبين 🚪\n"
-            "🔹 ميزة الرقص الجماعي والحفلة التلقائية لجميع أعضاء الغرفة 🕺\n"
-            "🔹 أمان عالٍ وإدارة كاملة للمشرفين وأوامر خاصة 🛠️\n"
-            "🔹 استضافة على مدار ٢٤ ساعة وبدون انقطاع على سيرفرات قوية ⚡\n\n"
-            "🤝 **شروط الإيجار:**\n"
-            "لاستئجار هذا البوت الرائع لغرفتك، يرجى مراسلة الحساب التالي الآن:\n"
-            "👉 @RQTM 👈"
-        )
-        
+    async def on_message(self, user_id: str, conversation_id: str, is_new_conversation: bool) -> None:
+        """Özel mesaj (DM): !komutlar ve !help burada da çalışır."""
         try:
-            # ✉️ إرسال الرد مباشرة إلى الرسائل الخاصة (Inbox) للمستخدم
-            await self.highrise.send_message(user_id, auto_reply)
+            if user_id == self.user_id:
+                return
+            response = await self.highrise.get_messages(conversation_id)
+            messages = getattr(response, "messages", None) or []
+            if not messages:
+                return
+            last = messages[0]  # en yeni mesaj
+            if getattr(last, "sender_id", user_id) == self.user_id:
+                return
+            msg_id = getattr(last, "id", None)
+            if msg_id is not None:
+                if msg_id in self.dm_seen:
+                    return
+                self.dm_seen.append(msg_id)
+                self.dm_seen = self.dm_seen[-200:]
+            text = (getattr(last, "content", "") or "").strip()
+            logger.info(f"📥 رسالة خاصة جديدة من المستخدم [{user_id}]: {text}")
+
+            username = await self.resolve_username(user_id)
+            user = User(user_id, username or user_id)
+            target = {"kind": "dm", "conversation_id": conversation_id}
+
+            if text.startswith("!") or (text in ("1", "2", "3") and self.help_pending(user.username)):
+                await self.handle_private(user, text, target)
+                return
+
+            # Komut değilse: tanıtım metni + !help ipucu
+            auto_reply = (
+                "أهلاً بك يا عزيزي! ❤️\n\n"
+                "🤖 أنا بوت متطور ومتكامل لإدارة الغرفة والارتقاء بها!\n\n"
+                "✨ **بعض مميزاتي الرائعة:**\n"
+                "🔹 يحتوي على ٢٥٦ رقصة جذابة تعمل بتكرار دائم وبدون أي تأخير ولو لثانية واحدة! 💃\n"
+                "🔹 نظام ترحيب ذكي وتلقائي بمجرد دخول اللاعبين 🚪\n"
+                "🔹 ميزة الرقص الجماعي والحفلة التلقائية لجميع أعضاء الغرفة 🕺\n"
+                "🔹 أمان عالٍ وإدارة كاملة للمشرفين وأوامر خاصة 🛠️\n"
+                "🔹 استضافة على مدار ٢٤ ساعة وبدون انقطاع على سيرفرات قوية ⚡\n\n"
+                "🤝 **شروط الإيجار:**\n"
+                "لاستئجار هذا البوت الرائع لغرفتك، يرجى مراسلة الحساب التالي الآن:\n"
+                "👉 @RQTM 👈"
+            ) + self.texts()["dm_hint"]
+            await self.send_private(target, auto_reply)
         except Exception as e:
-            logger.error(f"خطأ في إرسال الرد التلقائي على الرسالة الخاصة: {e}")
+            logger.error(f"خطأ في معالجة الرسالة الخاصة: {e}")
 
     async def on_tip(self, sender: User, receiver: User, tip):
         try:
@@ -1544,7 +1574,7 @@ class AdvancedBot(BaseBot):
         مثال: !emote https://high.rs/item?id=emote-alice-shrink&type=emote
         """
         if len(parts) < 2:
-            await self.highrise.chat("⚠️ يرجى إدخال رابط الرقصة بعد الأمر.\nمثال: !emote https://high.rs/item?id=emote-xxx&type=emote")
+            await self.reply("⚠️ يرجى إدخال رابط الرقصة بعد الأمر.\nمثال: !emote https://high.rs/item?id=emote-xxx&type=emote")
             return
 
         link = parts[1].strip()
@@ -1566,7 +1596,7 @@ class AdvancedBot(BaseBot):
             emote_id = None
 
         if not emote_id:
-            await self.highrise.chat("❌ الرابط غير صالح! يجب أن يحتوي على id=...")
+            await self.reply("❌ الرابط غير صالح! يجب أن يحتوي على id=...")
             logger.info(f"رابط غير صالح لـ !emote من {user.username}: {link}")
             return
 
@@ -1574,12 +1604,12 @@ class AdvancedBot(BaseBot):
         try:
             await self.highrise.send_emote(emote_id, user.id)
         except Exception as e:
-            await self.highrise.chat(f"❌ فشل تشغيل الرقصة [{emote_id}]. ربما المعرّف خاطئ أو أن هذا العنصر ليس رقصة.")
+            await self.reply(f"❌ فشل تشغيل الرقصة [{emote_id}]. ربما المعرّف خاطئ أو أن هذا العنصر ليس رقصة.")
             logger.error(f"خطأ في تشغيل !emote للرقصة {emote_id} من {user.username}: {e}")
             return
 
         await self.start_dance(user, emote_id)
-        await self.highrise.chat(f"✅ بدأت الرقصة [{emote_id}] وتم تثبيتها! للإيقاف اكتب: stop")
+        await self.reply(f"✅ بدأت الرقصة [{emote_id}] وتم تثبيتها! للإيقاف اكتب: stop")
         logger.info(f"شغّل المستخدم {user.username} الرقصة المخصصة {emote_id} عبر الرابط.")
 
     # ====================== مسابقة المعلومات ======================
@@ -1726,47 +1756,48 @@ class AdvancedBot(BaseBot):
 
     async def cmd_quiz(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
         if self.quiz_task and not self.quiz_task.done():
-            await self.highrise.chat("⚠️ المسابقة شغالة هسه! اكتب !quizstop إذا تريد توقفها.")
+            await self.reply("⚠️ المسابقة شغالة هسه! اكتب !quizstop إذا تريد توقفها.")
             return
         if self.mafia:
-            await self.highrise.chat("⚠️ لعبة المافيا شغالة هسه، اصبروا لين تخلص!")
+            await self.reply("⚠️ لعبة المافيا شغالة هسه، اصبروا لين تخلص!")
             return
         rounds = QUIZ_DEFAULT_ROUNDS
         if len(parts) > 1:
             try:
                 rounds = int(parts[1])
             except ValueError:
-                await self.highrise.chat(self.get_message("invalid_format", format="!quiz [العدد]"))
+                await self.reply(self.get_message("invalid_format", format="!quiz [العدد]"))
                 return
         rounds = max(1, min(rounds, len(QUIZ_QUESTIONS)))
+        _reply_ctx.set(None)  # yarışma mesajları herkese açık olsun
         self.quiz_task = create_task(self.run_quiz(rounds))
         logger.info(f"بدأ {user.username} مسابقة من {rounds} أسئلة.")
 
     async def cmd_quizstop(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
         if self.quiz_task and not self.quiz_task.done():
             self.quiz_task.cancel()
             self.quiz_current = None
             await self.stop_quiz_think()
-            await self.highrise.chat("🛑 انوقفت المسابقة. نشوفكم بجولة ثانية! 👋")
+            await self.reply("🛑 انوقفت المسابقة. نشوفكم بجولة ثانية! 👋")
         else:
-            await self.highrise.chat("ماكو مسابقة شغالة هسه.")
+            await self.reply("ماكو مسابقة شغالة هسه.")
 
     async def cmd_top(self, user: User, parts: list):
         if not self.quiz_scores:
-            await self.highrise.chat("📊 للحين ماكو أحد عنده نقاط، اطلبوا من المشرف يبدي مسابقة! 🧠")
+            await self.reply("📊 للحين ماكو أحد عنده نقاط، اطلبوا من المشرف يبدي مسابقة! 🧠")
             return
         ranking = sorted(self.quiz_scores.values(), key=lambda e: e["points"], reverse=True)[:5]
         medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
         lines = ["🏆 متصدرين المسابقة:"]
         for index, entry in enumerate(ranking):
             lines.append(f"{medals[index]} @{entry['name']} - {entry['points']} نقطة")
-        await self.highrise.chat("\n".join(lines))
+        await self.reply("\n".join(lines))
 
     # ====================== لعبة المافيا ======================
     async def mafia_say(self, text, color=""):
@@ -1857,10 +1888,10 @@ class AdvancedBot(BaseBot):
         try:
             await self.bot_play_emote(MAFIA_EMOTE_DAY)
             await self.mafia_say(
-                f"🎭 لعبة المافيا بدت!\nاكتبوا !join أو !دخول للمشاركة ({MAFIA_MIN_PLAYERS}-{MAFIA_MAX_PLAYERS} لاعبين)\n⏳ عدكم {MAFIA_JOIN_TIME} ثانية",
+                f"🎭 لعبة المافيا بدت!\nاهمسوا للبوت !join أو !دخول للمشاركة ({MAFIA_MIN_PLAYERS}-{MAFIA_MAX_PLAYERS} لاعبين)\n⏳ عدكم {MAFIA_JOIN_TIME} ثانية",
                 MAFIA_COLOR_TITLE)
             await sleep(MAFIA_JOIN_TIME / 2)
-            await self.mafia_say(f"📢 للحين {len(g['players'])} لاعب! اكتبوا !join للدخول", MAFIA_COLOR_TITLE)
+            await self.mafia_say(f"📢 للحين {len(g['players'])} لاعب! اهمسوا للبوت !join للدخول", MAFIA_COLOR_TITLE)
             await sleep(MAFIA_JOIN_TIME / 2)
             if len(g["players"]) < MAFIA_MIN_PLAYERS:
                 await self.mafia_say(f"😕 ما كملوا {MAFIA_MIN_PLAYERS} لاعبين، انلغت اللعبة!", MAFIA_COLOR_MAFIA)
@@ -1962,7 +1993,7 @@ class AdvancedBot(BaseBot):
         g["votes"] = {}
         g["event"] = asyncio.Event()
         await self.mafia_say(
-            f"🗳️ وقت التصويت! اكتبوا !vote رقم أو !صوت رقم\n⏳ عدكم {MAFIA_VOTE_TIME} ثانية\n{self.mafia_list_text()}",
+            f"🗳️ وقت التصويت! اهمسوا للبوت !vote رقم أو !صوت رقم\n⏳ عدكم {MAFIA_VOTE_TIME} ثانية\n{self.mafia_list_text()}",
             MAFIA_COLOR_VOTE)
         try:
             await asyncio.wait_for(g["event"].wait(), timeout=MAFIA_VOTE_TIME)
@@ -2059,22 +2090,33 @@ class AdvancedBot(BaseBot):
         self.mafia_check_events()
 
     async def on_whisper(self, user: User, message: str):
+        """Bota fısıldanan mesajlar: mafya aksiyonları, !komutlar ve yardım menüsü (1/2/3)."""
         try:
-            await self.mafia_handle_whisper(user, message)
+            if user.id == self.user_id:
+                return
+            text = message.strip()
+            words = text.lstrip("!").split()
+            verb = words[0].lower() if words else ""
+            # 🎭 Mafya gece aksiyonu (kill / save / check)
+            if verb in MAFIA_NIGHT_VERBS and self.mafia and self.mafia.get("phase") == "night":
+                await self.mafia_handle_whisper(user, text)
+                return
+            await self.handle_private(user, text, {"kind": "whisper", "user_id": user.id})
         except Exception as e:
             logger.error(f"خطأ في معالجة همس من {user.username}: {e}")
 
     async def cmd_mafia(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
         if self.mafia or (self.mafia_task and not self.mafia_task.done()):
-            await self.highrise.chat("⚠️ لعبة المافيا شغالة هسه!")
+            await self.reply("⚠️ لعبة المافيا شغالة هسه!")
             return
         if self.quiz_task and not self.quiz_task.done():
-            await self.highrise.chat("⚠️ المسابقة شغالة هسه، اصبروا لين تخلص!")
+            await self.reply("⚠️ المسابقة شغالة هسه، اصبروا لين تخلص!")
             return
         self.mafia = {"phase": "lobby", "players": {}, "night": {}, "votes": {}, "event": None}
+        _reply_ctx.set(None)  # oyun mesajları herkese açık olsun
         self.mafia_task = create_task(self.run_mafia())
         logger.info(f"بدأ {user.username} لعبة المافيا.")
 
@@ -2086,13 +2128,13 @@ class AdvancedBot(BaseBot):
         if key == (self.config.get("bot_username") or "").lower() or user.id == self.user_id:
             return
         if key in g["players"]:
-            await self.highrise.chat(f"@{user.username} انت مشترك من قبل 😉")
+            await self.reply(f"@{user.username} انت مشترك من قبل 😉")
             return
         if len(g["players"]) >= MAFIA_MAX_PLAYERS:
-            await self.highrise.chat("🚫 اللعبة امتلت!")
+            await self.reply("🚫 اللعبة امتلت!")
             return
         g["players"][key] = {"user": user, "role": None, "alive": True, "num": 0}
-        await self.highrise.chat(f"{MAFIA_COLOR_GOOD}✅ @{user.username} دخل اللعبة! ({len(g['players'])} لاعبين)")
+        await self.reply(f"{MAFIA_COLOR_GOOD}✅ @{user.username} دخل اللعبة! ({len(g['players'])} لاعبين)")
 
     async def cmd_mafia_vote(self, user: User, parts: list):
         g = self.mafia
@@ -2102,98 +2144,161 @@ class AdvancedBot(BaseBot):
         if not p or not p["alive"]:
             return
         if len(parts) < 2 or not parts[1].isdigit():
-            await self.highrise.chat(f"{MAFIA_COLOR_VOTE}@{user.username} اكتب: !vote رقم")
+            await self.reply(f"{MAFIA_COLOR_VOTE}@{user.username} اهمس للبوت: !vote رقم")
             return
         target = self.mafia_by_num(int(parts[1]))
         if not target:
-            await self.highrise.chat(f"{MAFIA_COLOR_VOTE}@{user.username} هذا الرقم مو صحيح أو صاحبه ميت!")
+            await self.reply(f"{MAFIA_COLOR_VOTE}@{user.username} هذا الرقم مو صحيح أو صاحبه ميت!")
             return
         if target is p:
-            await self.highrise.chat(f"{MAFIA_COLOR_VOTE}@{user.username} ما تقدر تصوت ع نفسك 😅")
+            await self.reply(f"{MAFIA_COLOR_VOTE}@{user.username} ما تقدر تصوت ع نفسك 😅")
             return
         g["votes"][user.username.lower()] = target["num"]
-        await self.highrise.chat(f"{MAFIA_COLOR_VOTE}🗳️ @{user.username} صوّت ✅")
+        await self.reply(f"{MAFIA_COLOR_VOTE}🗳️ @{user.username} صوّت ✅")
         self.mafia_check_events()
 
     async def cmd_mafia_stop(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
         if self.mafia_task and not self.mafia_task.done():
             self.mafia_task.cancel()
-            await self.highrise.chat(f"{MAFIA_COLOR_MAFIA}🛑 انوقفت لعبة المافيا!")
+            await self.reply(f"{MAFIA_COLOR_MAFIA}🛑 انوقفت لعبة المافيا!")
         else:
-            await self.highrise.chat("ماكو لعبة مافيا شغالة هسه.")
+            await self.reply("ماكو لعبة مافيا شغالة هسه.")
+
+    # ====================== 🔒 Özel komut sistemi (fısıltı / DM) ======================
+    def texts(self):
+        return HELP_TEXTS["ar"]
+
+    def user_level(self, username: str) -> int:
+        """1 = Kurucu, 2 = Moderatör, 3 = Üye"""
+        name = (username or "").lower()
+        if self.is_host(name):
+            return 1
+        if name in self.config.get("admin_usernames", []):
+            return 2
+        return 3
+
+    def help_pending(self, username: str) -> bool:
+        """Kişi son 10 dakikada !help menüsünü açtıysa 1/2/3 yazması menü seçimi sayılır."""
+        opened = self.help_state.get((username or "").lower())
+        return bool(opened and (datetime.now() - opened).total_seconds() < 600)
+
+    async def resolve_username(self, user_id: str):
+        for u in self.active_users.values():
+            if u.id == user_id:
+                return u.username
+        try:
+            resp = await self.webapi.get_user(user_id)
+            return resp.user.username
+        except Exception:
+            return None
+
+    async def send_private(self, target: dict, text: str):
+        """Mesajı sadece hedef kişiye gönderir (fısıltı veya DM). Uzun metni parçalara böler."""
+        kind = target.get("kind")
+        limit = 230 if kind == "whisper" else 450
+        chunks, cur = [], ""
+        for line in str(text).split("\n"):
+            while len(line) > limit:
+                if cur:
+                    chunks.append(cur)
+                    cur = ""
+                chunks.append(line[:limit])
+                line = line[limit:]
+            if cur and len(cur) + len(line) + 1 > limit:
+                chunks.append(cur)
+                cur = line
+            else:
+                cur = (cur + "\n" + line) if cur else line
+        if cur:
+            chunks.append(cur)
+        for i, chunk in enumerate(chunks):
+            try:
+                if kind == "whisper":
+                    await self.highrise.send_whisper(target["user_id"], chunk)
+                else:
+                    await self.highrise.send_message(target["conversation_id"], chunk)
+            except Exception as e:
+                logger.error(f"خطأ في إرسال الرد الخاص: {e}")
+                break
+            if i < len(chunks) - 1:
+                await sleep(0.5)
+
+    async def reply(self, text: str):
+        """Komut cevabı: komut fısıltı/DM ile geldiyse özelden, değilse genel sohbete yazar."""
+        target = _reply_ctx.get()
+        if target:
+            await self.send_private(target, text)
+        else:
+            await self.highrise.chat(text)
+
+    async def handle_private(self, user: User, text: str, target: dict):
+        """Fısıltı veya DM ile gelen mesajı işler: menü seçimi (1/2/3) ya da !komut."""
+        text = text.strip()
+        if not text:
+            return
+        key = user.username.lower()
+        token = _reply_ctx.set(target)
+        try:
+            if text in ("1", "2", "3") and self.help_pending(key):
+                await self.send_help(user, text)
+            elif text.startswith("!"):
+                parts = text.split()
+                first = parts[0].lower()
+                cmd = "!item set" if first == "!item" else first
+                handler = self.commands.get(cmd)
+                if handler:
+                    await handler(user, parts)
+                else:
+                    await self.reply(self.texts()["unknown"])
+            else:
+                last = self.hint_sent.get(key)
+                if not last or (datetime.now() - last).total_seconds() > 30:
+                    self.hint_sent[key] = datetime.now()
+                    await self.reply(self.texts()["unknown"])
+        except Exception as e:
+            logger.error(f"خطأ في تنفيذ أمر خاص من {user.username}: {e}")
+        finally:
+            _reply_ctx.reset(token)
+
+    async def public_command_hint(self, user: User):
+        """Genel sohbette '!' yazan kişiye özelden ipucu fısıldar (dakikada 1 kere)."""
+        if not PUBLIC_COMMAND_HINT:
+            return
+        key = user.username.lower()
+        last = self.hint_sent.get("public:" + key)
+        if last and (datetime.now() - last).total_seconds() < 60:
+            return
+        self.hint_sent["public:" + key] = datetime.now()
+        try:
+            await self.highrise.send_whisper(user.id, self.texts()["public_hint"])
+        except Exception as e:
+            logger.error(f"خطأ في إرسال التلميح إلى {user.username}: {e}")
+
+    async def send_help(self, user: User, level=None):
+        t = self.texts()
+        self.help_state[user.username.lower()] = datetime.now()
+        if level in ("1", "2", "3"):
+            await self.reply(t[level])
+        else:
+            await self.reply(t["main"].format(level=t["levels"][self.user_level(user.username)]))
+        logger.info(f"طلب {user.username} المساعدة (قسم: {level or 'القائمة الرئيسية'}).")
 
     async def cmd_help(self, user: User, parts: list):
-        help_text = (
-            "أوامر البوت:\n"
-            "1-6 - تشغيل رقصة\n"
-            "stop - إيقاف الرقص\n"
-            "!help - عرض المساعدة\n"
-            "!spam العدد الرسالة - إرسال رسائل سبام\n"
-            "!tele @username [vip|vip1|dj|موقع_مخصص] - نقل المستخدم\n"
-            "!tele to @username - الانتقال إلى المستخدم\n"
-            "!tele me @username - نقل المستخدم إلى المشرف\n"
-            "!tele me all - نقل الجميع إلى المشرف\n"
-            "!heart العدد @username - إرسال قلب بنفسجي\n"
-            "!heart all - قلب بنفسجي للجميع\n"
-            "!clap العدد @username - إرسال clap\n"
-            "!clap all - clap للجميع\n"
-            "!wink العدد @username - إرسال wink\n"
-            "!wink all - wink للجميع\n"
-            "!wave العدد @username - إرسال wave\n"
-            "!wave all - wave للجميع\n"
-            "!thumbs العدد @username - إرسال thumbs-up\n"
-            "!thumbs all - thumbs-up للجميع\n"
-            "!wallet - عرض رصيد البوت\n"
-            "!set - نقل البوت إلى المشرف\n"
-            "!t - نقل البوت إلى 11.0, 7.0, 11.0\n"
-            "!setstart - حفظ مكانك كنقطة بداية دائمة للبوت\n"
-            "!item set @username - تغيير مظهر البوت إلى عناصر المستخدم\n"
-            "!tip <العدد> all - إكرامية للجميع\n"
-            "!vip - الانتقال إلى VIP\n"
-            "!vip1 - الانتقال إلى VIP1\n"
-            "!dj - الانتقال إلى DJ\n"
-            "!down - الانتقال إلى الأسفل\n"
-            "!ban @username - حظر المستخدم\n"
-            "!unban @username - إلغاء حظر المستخدم\n"
-            "!dancechain - تشغيل سلسلة الرقص\n"
-            "!addtele اسم_الموقع - حفظ موقع جديد\n"
-            "!deltele اسم_الموقع - حذف موقع النقل\n"
-            "!welcome الرسالة - تعيين رسالة الترحيب\n"
-            "!addadmin @username - إضافة مشرف (Host فقط)\n"
-            "!removeadmin @username - حذف مشرف (Host فقط)\n"
-            "!emotebot اسم/رقم_الرقصة - تغيير رقصة البوت المستمرة (للمشرفين فقط)\n"
-            "!emote رابط_الرقصة - تشغيل أي رقصة من رابط high.rs (دون الحاجة لإضافتها مسبقًا)\n"
-            "!loopchat الرسالة - تعيين رسالة البوت المتكررة/السبام (للمشرفين فقط)\n"
-            "!listadd - عرض قائمة المشرفين\n"
-            "!freeze @username - تجميد المستخدم\n"
-            "!unfreeze @username - إلغاء تجميد المستخدم\n"
-            "!party @username رقم - تشغيل رقص إجباري للمستخدم\n"
-            "!party all رقم - تشغيل الرقص للجميع\n"
-            "!partys @username - إيقاف الرقص الإجباري للمستخدم\n"
-            "!quiz [العدد] - بدء مسابقة المعلومات (للمشرفين)\n"
-            "!quizstop - إيقاف المسابقة (للمشرفين)\n"
-            "!top - عرض المتصدرين\n"
-            "!mafia - بدء لعبة المافيا (للمشرفين)\n"
-            "!join - الدخول للعبة | !vote رقم - التصويت\n"
-            "!mafiastop - إيقاف المافيا (للمشرفين)\n\n"
-            "📩 لمزيد من المعلومات راسل @RQTM!"
-        )
-        for chunk in [help_text[i:i+200] for i in range(0, len(help_text), 200)]:
-            await self.highrise.chat(chunk)
-        logger.info(f"طلب {user.username} المساعدة.")
+        level = parts[1] if len(parts) > 1 else None
+        await self.send_help(user, level)
 
     async def cmd_spam(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             logger.info(f"المستخدم {user.username} لا يملك الصلاحية لتنفيذ !spam.")
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) < 2 or not parts[1].isdigit():
-            await self.highrise.chat(self.get_message("invalid_format", format="!spam العدد الرسالة"))
+            await self.reply(self.get_message("invalid_format", format="!spam العدد الرسالة"))
             logger.info(f"صيغة غير صحيحة للأمر !spam من قبل {user.username}.")
             return
 
@@ -2201,7 +2306,7 @@ class AdvancedBot(BaseBot):
             count = int(parts[1])
             spam_message = " ".join(parts[2:]) if len(parts) > 2 else "رسالة سبام تجريبية!"
             if count < 1 or count > 100:
-                await self.highrise.chat("يجب أن يكون عدد الرسائل بين 1 و100.")
+                await self.reply("يجب أن يكون عدد الرسائل بين 1 و100.")
                 logger.info(f"عدد الرسائل غير صالح ({count}) أدخله {user.username}.")
                 return
 
@@ -2209,14 +2314,14 @@ class AdvancedBot(BaseBot):
                 await self.highrise.chat(spam_message)
                 await sleep(2.0)
             logger.info(f"تم إرسال {count} رسالة سبام بواسطة {user.username}: {spam_message}")
-            await self.highrise.chat(f"تم إرسال {count} رسالة سبام!")
+            await self.reply(f"تم إرسال {count} رسالة سبام!")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في إرسال رسائل السبام: {str(e)}")
+            await self.reply(f"خطأ في إرسال رسائل السبام: {str(e)}")
             logger.error(f"خطأ في cmd_spam لـ {user.username}: {str(e)}")
 
     async def cmd_tele(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             logger.info(f"المستخدم {user.username} لا يملك الصلاحية لتنفيذ !tele.")
             return
 
@@ -2227,67 +2332,67 @@ class AdvancedBot(BaseBot):
             location = parts[2]
             target_user = self.active_users.get(target_username)
             if not target_user:
-                await self.highrise.chat(self.get_message("user_not_found", username=target_username))
+                await self.reply(self.get_message("user_not_found", username=target_username))
                 logger.info(f"لم يتم العثور على المستخدم المستهدف {target_username} (طلب {user.username}).")
                 return
             if location not in self.config["teleport_locations"]:
-                await self.highrise.chat(f"الموقع {location} غير موجود!")
+                await self.reply(f"الموقع {location} غير موجود!")
                 logger.info(f"لم يتم العثور على الموقع {location} (طلب {user.username}) للنقل.")
                 return
             try:
                 dest_data = self.config["teleport_locations"][location]
                 dest = Position(x=dest_data["x"], y=dest_data["y"], z=dest_data["z"])
                 await self.highrise.teleport(user_id=target_user.id, dest=dest)
-                await self.highrise.chat(self.get_message("teleport_success", username=target_user.username, location=location.upper()))
+                await self.reply(self.get_message("teleport_success", username=target_user.username, location=location.upper()))
                 logger.info(f"تم نقل المستخدم {target_username} إلى {location}.")
             except Exception as e:
-                await self.highrise.chat(self.get_message("teleport_error", error=str(e)))
+                await self.reply(self.get_message("teleport_error", error=str(e)))
                 logger.error(f"خطأ في نقل {target_username} إلى {location}: {e}")
 
         elif len(parts) == 3 and parts[1] == "to" and parts[2].startswith("@"):
             target_username = parts[2][1:].lower()
             target_user = self.active_users.get(target_username)
             if not target_user:
-                await self.highrise.chat(self.get_message("user_not_found", username=target_username))
+                await self.reply(self.get_message("user_not_found", username=target_username))
                 logger.info(f"لم يتم العثور على المستخدم المستهدف {target_username} (طلب {user.username}).")
                 return
             try:
                 position = self.user_positions.get(target_username)
                 if position:
                     await self.highrise.teleport(user_id=user.id, dest=position)
-                    await self.highrise.chat(f"تم نقل @{user.username} إلى مكان @{target_user.username}.")
+                    await self.reply(f"تم نقل @{user.username} إلى مكان @{target_user.username}.")
                     logger.info(f"تم نقل المستخدم {user.username} إلى مكان {target_username}.")
                 else:
-                    await self.highrise.chat("موقع المستخدم غير متاح.")
+                    await self.reply("موقع المستخدم غير متاح.")
                     logger.info(f"موقع {target_username} غير متاح لنقل {user.username}.")
             except Exception as e:
-                await self.highrise.chat(self.get_message("teleport_error", error=str(e)))
+                await self.reply(self.get_message("teleport_error", error=str(e)))
                 logger.error(f"خطأ في الانتقال إلى {target_username}: {e}")
 
         elif len(parts) == 3 and parts[1] == "me" and parts[2].startswith("@"):
             target_username = parts[2][1:].lower()
             target_user = self.active_users.get(target_username)
             if not target_user:
-                await self.highrise.chat(self.get_message("user_not_found", username=target_username))
+                await self.reply(self.get_message("user_not_found", username=target_username))
                 logger.info(f"لم يتم العثور على المستخدم المستهدف {target_username} (طلب {user.username}).")
                 return
             try:
                 position = self.user_positions.get(user.username.lower())
                 if position:
                     await self.highrise.teleport(user_id=target_user.id, dest=position)
-                    await self.highrise.chat(f"تم نقل @{target_user.username} إلى مكان @{user.username}.")
+                    await self.reply(f"تم نقل @{target_user.username} إلى مكان @{user.username}.")
                     logger.info(f"تم نقل المستخدم {target_username} إلى مكان {user.username}.")
                 else:
-                    await self.highrise.chat("موقعك غير متاح.")
+                    await self.reply("موقعك غير متاح.")
                     logger.info(f"موقع {user.username} غير متاح لنقل {target_username}.")
             except Exception as e:
-                await self.highrise.chat(self.get_message("teleport_error", error=str(e)))
+                await self.reply(self.get_message("teleport_error", error=str(e)))
                 logger.error(f"خطأ في نقل {target_username} إلى {user.username}: {e}")
 
         elif len(parts) == 3 and parts[1] == "me" and parts[2] == "all":
             admin_position = self.user_positions.get(user.username.lower())
             if not admin_position:
-                await self.highrise.chat("موقعك غير متاح.")
+                await self.reply("موقعك غير متاح.")
                 logger.info(f"موقع {user.username} غير متاح لنقل جميع المستخدمين.")
                 return
             try:
@@ -2304,14 +2409,14 @@ class AdvancedBot(BaseBot):
                         await sleep(0.5)
                     except Exception as e:
                         logger.error(f"خطأ في نقل {username} إلى {user.username}: {e}")
-                await self.highrise.chat(f"تم نقل {successful_teleports} مستخدم إلى مكان @{user.username}.")
+                await self.reply(f"تم نقل {successful_teleports} مستخدم إلى مكان @{user.username}.")
                 logger.info(f"تم نقل {successful_teleports} مستخدم إلى مكان {user.username}.")
             except Exception as e:
-                await self.highrise.chat(self.get_message("teleport_error", error=str(e)))
+                await self.reply(self.get_message("teleport_error", error=str(e)))
                 logger.error(f"خطأ في نقل جميع المستخدمين إلى {user.username}: {e}")
 
         else:
-            await self.highrise.chat(self.get_message("invalid_format", format="!tele @username [الموقع] أو !tele to @username أو !tele me @username أو !tele me all"))
+            await self.reply(self.get_message("invalid_format", format="!tele @username [الموقع] أو !tele to @username أو !tele me @username أو !tele me all"))
             logger.info(f"صيغة غير صحيحة للأمر !tele من قبل {user.username}.")
 
     async def cmd_heart(self, user: User, parts: list):
@@ -2319,13 +2424,13 @@ class AdvancedBot(BaseBot):
         
         if parts[0] == "!heart" and len(parts) == 2 and parts[1] == "all":
             if user.username.lower() not in self.config["admin_usernames"]:
-                await self.highrise.chat(self.get_message("no_permission"))
+                await self.reply(self.get_message("no_permission"))
                 return
             try:
                 active_users = list(self.active_users.items())
                 active_users_count = len([u for u in active_users if u[1].id != self.user_id])
                 if active_users_count == 0:
-                    await self.highrise.chat("لا يوجد مستخدمون متصلون في الغرفة!")
+                    await self.reply("لا يوجد مستخدمون متصلون في الغرفة!")
                     return
                 reaction_id = "heart"
                 successful_hearts = 0
@@ -2340,51 +2445,51 @@ class AdvancedBot(BaseBot):
                         successful_hearts += 1
                         await sleep(0.5)
                     except Exception as e:
-                        await self.highrise.chat(f"خطأ في إرسال قلب بنفسجي إلى @{target_user.username}: {e}")
+                        await self.reply(f"خطأ في إرسال قلب بنفسجي إلى @{target_user.username}: {e}")
                         logger.error(f"خطأ في إرسال قلب إلى {target_user.username}: {e}")
                 if successful_hearts > 0:
-                    await self.highrise.chat(self.get_message("heart_all_success", count=successful_hearts))
+                    await self.reply(self.get_message("heart_all_success", count=successful_hearts))
                     logger.info(f"تم إرسال قلب بنفسجي إلى {successful_hearts} مستخدم.")
                 else:
-                    await self.highrise.chat("لم يتم إرسال أي قلب بنجاح.")
+                    await self.reply("لم يتم إرسال أي قلب بنجاح.")
             except Exception as e:
-                await self.highrise.chat(f"خطأ في تنفيذ الأمر: {e}")
+                await self.reply(f"خطأ في تنفيذ الأمر: {e}")
                 logger.error(f"خطأ في إرسال القلوب للجميع: {e}")
             return
 
         if len(parts) != 3:
-            await self.highrise.chat(self.get_message("invalid_format", format="!heart العدد @username أو !heart all"))
+            await self.reply(self.get_message("invalid_format", format="!heart العدد @username أو !heart all"))
             return
 
         try:
             count = int(parts[1])
             if count < 1 or count > 100:
-                await self.highrise.chat(f"@{user.username}: يجب أن يكون العدد بين 1 و100.")
+                await self.reply(f"@{user.username}: يجب أن يكون العدد بين 1 و100.")
                 return
         except ValueError:
-            await self.highrise.chat(f"@{user.username}: العدد غير صالح.")
+            await self.reply(f"@{user.username}: العدد غير صالح.")
             return
 
         target_username = parts[2].lstrip('@').lower()
         target_user = next((u for u in self.active_users.values() if u.username.lower() == target_username), None)
 
         if not target_user:
-            await self.highrise.chat(self.get_message("user_not_found", username=target_username))
+            await self.reply(self.get_message("user_not_found", username=target_username))
             return
 
         try:
             reaction_id = "heart"
             for _ in range(count):
                 if target_user.username.lower() not in self.active_users:
-                    await self.highrise.chat(f"أصبح المستخدم @{target_user.username} غير متصل ولم يتم إرسال القلوب.")
+                    await self.reply(f"أصبح المستخدم @{target_user.username} غير متصل ولم يتم إرسال القلوب.")
                     logger.info(f"أصبح المستخدم {target_user.username} غير متصل أثناء إرسال القلوب.")
                     return
                 await self.highrise.react(reaction_id, target_user.id)
                 await sleep(0.5)
-            await self.highrise.chat(self.get_message("heart_success", count=count, username=target_user.username))
+            await self.reply(self.get_message("heart_success", count=count, username=target_user.username))
             logger.info(f"تم إرسال {count} قلب بنفسجي إلى {target_user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في إرسال القلب البنفسجي: {e}")
+            await self.reply(f"خطأ في إرسال القلب البنفسجي: {e}")
             logger.error(f"خطأ في إرسال قلب إلى {target_username}: {e}")
 
     async def cmd_clap(self, user: User, parts: list):
@@ -2392,13 +2497,13 @@ class AdvancedBot(BaseBot):
         
         if parts[0] == "!clap" and len(parts) == 2 and parts[1] == "all":
             if user.username.lower() not in self.config["admin_usernames"]:
-                await self.highrise.chat(self.get_message("no_permission"))
+                await self.reply(self.get_message("no_permission"))
                 return
             try:
                 active_users = list(self.active_users.items())
                 active_users_count = len([u for u in active_users if u[1].id != self.user_id])
                 if active_users_count == 0:
-                    await self.highrise.chat("لا يوجد مستخدمون متصلون في الغرفة!")
+                    await self.reply("لا يوجد مستخدمون متصلون في الغرفة!")
                     return
                 reaction_id = "clap"
                 successful_reactions = 0
@@ -2413,51 +2518,51 @@ class AdvancedBot(BaseBot):
                         successful_reactions += 1
                         await sleep(0.5)
                     except Exception as e:
-                        await self.highrise.chat(f"خطأ في إرسال clap إلى @{target_user.username}: {e}")
+                        await self.reply(f"خطأ في إرسال clap إلى @{target_user.username}: {e}")
                         logger.error(f"خطأ في إرسال clap إلى {target_user.username}: {e}")
                 if successful_reactions > 0:
-                    await self.highrise.chat(self.get_message("heart_all_success", count=successful_reactions))
+                    await self.reply(self.get_message("heart_all_success", count=successful_reactions))
                     logger.info(f"تم إرسال Clap إلى {successful_reactions} مستخدم.")
                 else:
-                    await self.highrise.chat("لم يتم إرسال أي تصفيق بنجاح.")
+                    await self.reply("لم يتم إرسال أي تصفيق بنجاح.")
             except Exception as e:
-                await self.highrise.chat(f"خطأ في تنفيذ الأمر: {e}")
+                await self.reply(f"خطأ في تنفيذ الأمر: {e}")
                 logger.error(f"خطأ في إرسال clap للجميع: {e}")
             return
 
         if len(parts) != 3:
-            await self.highrise.chat(self.get_message("invalid_format", format="!clap العدد @username أو !clap all"))
+            await self.reply(self.get_message("invalid_format", format="!clap العدد @username أو !clap all"))
             return
 
         try:
             count = int(parts[1])
             if count < 1 or count > 100:
-                await self.highrise.chat(f"@{user.username}: يجب أن يكون العدد بين 1 و100.")
+                await self.reply(f"@{user.username}: يجب أن يكون العدد بين 1 و100.")
                 return
         except ValueError:
-            await self.highrise.chat(f"@{user.username}: العدد غير صالح.")
+            await self.reply(f"@{user.username}: العدد غير صالح.")
             return
 
         target_username = parts[2].lstrip('@').lower()
         target_user = next((u for u in self.active_users.values() if u.username.lower() == target_username), None)
 
         if not target_user:
-            await self.highrise.chat(self.get_message("user_not_found", username=target_username))
+            await self.reply(self.get_message("user_not_found", username=target_username))
             return
 
         try:
             reaction_id = "clap"
             for _ in range(count):
                 if target_user.username.lower() not in self.active_users:
-                    await self.highrise.chat(f"أصبح المستخدم @{target_user.username} غير متصل ولم يتم إرسال clap.")
+                    await self.reply(f"أصبح المستخدم @{target_user.username} غير متصل ولم يتم إرسال clap.")
                     logger.info(f"أصبح المستخدم {target_user.username} غير متصل أثناء إرسال clap.")
                     return
                 await self.highrise.react(reaction_id, target_user.id)
                 await sleep(0.5)
-            await self.highrise.chat(self.get_message("clap_success", count=count, username=target_user.username))
+            await self.reply(self.get_message("clap_success", count=count, username=target_user.username))
             logger.info(f"تم إرسال {count} clap إلى {target_user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في إرسال clap: {e}")
+            await self.reply(f"خطأ في إرسال clap: {e}")
             logger.error(f"خطأ في إرسال clap إلى {target_username}: {e}")
 
     async def cmd_wink(self, user: User, parts: list):
@@ -2465,13 +2570,13 @@ class AdvancedBot(BaseBot):
         
         if parts[0] == "!wink" and len(parts) == 2 and parts[1] == "all":
             if user.username.lower() not in self.config["admin_usernames"]:
-                await self.highrise.chat(self.get_message("no_permission"))
+                await self.reply(self.get_message("no_permission"))
                 return
             try:
                 active_users = list(self.active_users.items())
                 active_users_count = len([u for u in active_users if u[1].id != self.user_id])
                 if active_users_count == 0:
-                    await self.highrise.chat("لا يوجد مستخدمون متصلون في الغرفة!")
+                    await self.reply("لا يوجد مستخدمون متصلون في الغرفة!")
                     return
                 reaction_id = "wink"
                 successful_reactions = 0
@@ -2486,51 +2591,51 @@ class AdvancedBot(BaseBot):
                         successful_reactions += 1
                         await sleep(0.5)
                     except Exception as e:
-                        await self.highrise.chat(f"خطأ في إرسال wink إلى @{target_user.username}: {e}")
+                        await self.reply(f"خطأ في إرسال wink إلى @{target_user.username}: {e}")
                         logger.error(f"خطأ في إرسال wink إلى {target_user.username}: {e}")
                 if successful_reactions > 0:
-                    await self.highrise.chat(self.get_message("heart_all_success", count=successful_reactions))
+                    await self.reply(self.get_message("heart_all_success", count=successful_reactions))
                     logger.info(f"تم إرسال Wink إلى {successful_reactions} مستخدم.")
                 else:
-                    await self.highrise.chat("لم يتم إرسال أي غمزة بنجاح.")
+                    await self.reply("لم يتم إرسال أي غمزة بنجاح.")
             except Exception as e:
-                await self.highrise.chat(f"خطأ في تنفيذ الأمر: {e}")
+                await self.reply(f"خطأ في تنفيذ الأمر: {e}")
                 logger.error(f"خطأ في إرسال wink للجميع: {e}")
             return
 
         if len(parts) != 3:
-            await self.highrise.chat(self.get_message("invalid_format", format="!wink العدد @username أو !wink all"))
+            await self.reply(self.get_message("invalid_format", format="!wink العدد @username أو !wink all"))
             return
 
         try:
             count = int(parts[1])
             if count < 1 or count > 100:
-                await self.highrise.chat(f"@{user.username}: يجب أن يكون العدد بين 1 و100.")
+                await self.reply(f"@{user.username}: يجب أن يكون العدد بين 1 و100.")
                 return
         except ValueError:
-            await self.highrise.chat(f"@{user.username}: العدد غير صالح.")
+            await self.reply(f"@{user.username}: العدد غير صالح.")
             return
 
         target_username = parts[2].lstrip('@').lower()
         target_user = next((u for u in self.active_users.values() if u.username.lower() == target_username), None)
 
         if not target_user:
-            await self.highrise.chat(self.get_message("user_not_found", username=target_username))
+            await self.reply(self.get_message("user_not_found", username=target_username))
             return
 
         try:
             reaction_id = "wink"
             for _ in range(count):
                 if target_user.username.lower() not in self.active_users:
-                    await self.highrise.chat(f"أصبح المستخدم @{target_user.username} غير متصل ولم يتم إرسال wink.")
+                    await self.reply(f"أصبح المستخدم @{target_user.username} غير متصل ولم يتم إرسال wink.")
                     logger.info(f"أصبح المستخدم {target_user.username} غير متصل أثناء إرسال wink.")
                     return
                 await self.highrise.react(reaction_id, target_user.id)
                 await sleep(0.5)
-            await self.highrise.chat(self.get_message("wink_success", count=count, username=target_user.username))
+            await self.reply(self.get_message("wink_success", count=count, username=target_user.username))
             logger.info(f"تم إرسال {count} wink إلى {target_user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في إرسال wink: {e}")
+            await self.reply(f"خطأ في إرسال wink: {e}")
             logger.error(f"خطأ في إرسال wink إلى {target_username}: {e}")
 
     async def cmd_wave(self, user: User, parts: list):
@@ -2538,13 +2643,13 @@ class AdvancedBot(BaseBot):
         
         if parts[0] == "!wave" and len(parts) == 2 and parts[1] == "all":
             if user.username.lower() not in self.config["admin_usernames"]:
-                await self.highrise.chat(self.get_message("no_permission"))
+                await self.reply(self.get_message("no_permission"))
                 return
             try:
                 active_users = list(self.active_users.items())
                 active_users_count = len([u for u in active_users if u[1].id != self.user_id])
                 if active_users_count == 0:
-                    await self.highrise.chat("لا يوجد مستخدمون متصلون في الغرفة!")
+                    await self.reply("لا يوجد مستخدمون متصلون في الغرفة!")
                     return
                 reaction_id = "wave"
                 successful_reactions = 0
@@ -2559,51 +2664,51 @@ class AdvancedBot(BaseBot):
                         successful_reactions += 1
                         await sleep(0.5)
                     except Exception as e:
-                        await self.highrise.chat(f"خطأ في إرسال wave إلى @{target_user.username}: {e}")
+                        await self.reply(f"خطأ في إرسال wave إلى @{target_user.username}: {e}")
                         logger.error(f"خطأ في إرسال wave إلى {target_user.username}: {e}")
                 if successful_reactions > 0:
-                    await self.highrise.chat(self.get_message("heart_all_success", count=successful_reactions))
+                    await self.reply(self.get_message("heart_all_success", count=successful_reactions))
                     logger.info(f"تم إرسال Wave إلى {successful_reactions} مستخدم.")
                 else:
-                    await self.highrise.chat("لم يتم إرسال أي تحية بنجاح.")
+                    await self.reply("لم يتم إرسال أي تحية بنجاح.")
             except Exception as e:
-                await self.highrise.chat(f"خطأ في تنفيذ الأمر: {e}")
+                await self.reply(f"خطأ في تنفيذ الأمر: {e}")
                 logger.error(f"خطأ في إرسال wave للجميع: {e}")
             return
 
         if len(parts) != 3:
-            await self.highrise.chat(self.get_message("invalid_format", format="!wave العدد @username أو !wave all"))
+            await self.reply(self.get_message("invalid_format", format="!wave العدد @username أو !wave all"))
             return
 
         try:
             count = int(parts[1])
             if count < 1 or count > 100:
-                await self.highrise.chat(f"@{user.username}: يجب أن يكون العدد بين 1 و100.")
+                await self.reply(f"@{user.username}: يجب أن يكون العدد بين 1 و100.")
                 return
         except ValueError:
-            await self.highrise.chat(f"@{user.username}: العدد غير صالح.")
+            await self.reply(f"@{user.username}: العدد غير صالح.")
             return
 
         target_username = parts[2].lstrip('@').lower()
         target_user = next((u for u in self.active_users.values() if u.username.lower() == target_username), None)
 
         if not target_user:
-            await self.highrise.chat(self.get_message("user_not_found", username=target_username))
+            await self.reply(self.get_message("user_not_found", username=target_username))
             return
 
         try:
             reaction_id = "wave"
             for _ in range(count):
                 if target_user.username.lower() not in self.active_users:
-                    await self.highrise.chat(f"أصبح المستخدم @{target_user.username} غير متصل ولم يتم إرسال wave.")
+                    await self.reply(f"أصبح المستخدم @{target_user.username} غير متصل ولم يتم إرسال wave.")
                     logger.info(f"أصبح المستخدم {target_user.username} غير متصل أثناء إرسال wave.")
                     return
                 await self.highrise.react(reaction_id, target_user.id)
                 await sleep(0.5)
-            await self.highrise.chat(self.get_message("wave_success", count=count, username=target_user.username))
+            await self.reply(self.get_message("wave_success", count=count, username=target_user.username))
             logger.info(f"تم إرسال {count} wave إلى {target_user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في إرسال wave: {e}")
+            await self.reply(f"خطأ في إرسال wave: {e}")
             logger.error(f"خطأ في إرسال wave إلى {target_username}: {e}")
 
     async def cmd_thumbs(self, user: User, parts: list):
@@ -2611,13 +2716,13 @@ class AdvancedBot(BaseBot):
         
         if parts[0] == "!thumbs" and len(parts) == 2 and parts[1] == "all":
             if user.username.lower() not in self.config["admin_usernames"]:
-                await self.highrise.chat(self.get_message("no_permission"))
+                await self.reply(self.get_message("no_permission"))
                 return
             try:
                 active_users = list(self.active_users.items())
                 active_users_count = len([u for u in active_users if u[1].id != self.user_id])
                 if active_users_count == 0:
-                    await self.highrise.chat("لا يوجد مستخدمون متصلون في الغرفة!")
+                    await self.reply("لا يوجد مستخدمون متصلون في الغرفة!")
                     return
                 reaction_id = "thumbs-up"
                 successful_reactions = 0
@@ -2632,56 +2737,56 @@ class AdvancedBot(BaseBot):
                         successful_reactions += 1
                         await sleep(0.5)
                     except Exception as e:
-                        await self.highrise.chat(f"خطأ في إرسال thumbs-up إلى @{target_user.username}: {e}")
+                        await self.reply(f"خطأ في إرسال thumbs-up إلى @{target_user.username}: {e}")
                         logger.error(f"خطأ في إرسال thumbs-up إلى {target_user.username}: {e}")
                 if successful_reactions > 0:
-                    await self.highrise.chat(self.get_message("heart_all_success", count=successful_reactions))
+                    await self.reply(self.get_message("heart_all_success", count=successful_reactions))
                     logger.info(f"تم إرسال Thumbs-up إلى {successful_reactions} مستخدم.")
                 else:
-                    await self.highrise.chat("لم يتم إرسال أي إعجاب بنجاح.")
+                    await self.reply("لم يتم إرسال أي إعجاب بنجاح.")
             except Exception as e:
-                await self.highrise.chat(f"خطأ في تنفيذ الأمر: {e}")
+                await self.reply(f"خطأ في تنفيذ الأمر: {e}")
                 logger.error(f"خطأ في إرسال thumbs-up للجميع: {e}")
             return
 
         if len(parts) != 3:
-            await self.highrise.chat(self.get_message("invalid_format", format="!thumbs العدد @username أو !thumbs all"))
+            await self.reply(self.get_message("invalid_format", format="!thumbs العدد @username أو !thumbs all"))
             return
 
         try:
             count = int(parts[1])
             if count < 1 or count > 100:
-                await self.highrise.chat(f"@{user.username}: يجب أن يكون العدد بين 1 و100.")
+                await self.reply(f"@{user.username}: يجب أن يكون العدد بين 1 و100.")
                 return
         except ValueError:
-            await self.highrise.chat(f"@{user.username}: العدد غير صالح.")
+            await self.reply(f"@{user.username}: العدد غير صالح.")
             return
 
         target_username = parts[2].lstrip('@').lower()
         target_user = next((u for u in self.active_users.values() if u.username.lower() == target_username), None)
 
         if not target_user:
-            await self.highrise.chat(self.get_message("user_not_found", username=target_username))
+            await self.reply(self.get_message("user_not_found", username=target_username))
             return
 
         try:
             reaction_id = "thumbs-up"
             for _ in range(count):
                 if target_user.username.lower() not in self.active_users:
-                    await self.highrise.chat(f"أصبح المستخدم @{target_user.username} غير متصل ولم يتم إرسال thumbs-up.")
+                    await self.reply(f"أصبح المستخدم @{target_user.username} غير متصل ولم يتم إرسال thumbs-up.")
                     logger.info(f"أصبح المستخدم {target_user.username} غير متصل أثناء إرسال thumbs-up.")
                     return
                 await self.highrise.react(reaction_id, target_user.id)
                 await sleep(0.5)
-            await self.highrise.chat(self.get_message("thumbs_success", count=count, username=target_user.username))
+            await self.reply(self.get_message("thumbs_success", count=count, username=target_user.username))
             logger.info(f"تم إرسال {count} thumbs-up إلى {target_user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في إرسال thumbs-up: {e}")
+            await self.reply(f"خطأ في إرسال thumbs-up: {e}")
             logger.error(f"خطأ في إرسال thumbs-up إلى {target_username}: {e}")
 
     async def cmd_wallet(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
 
         try:
@@ -2694,29 +2799,29 @@ class AdvancedBot(BaseBot):
                         break
             else:
                 logger.error("بنية wallet غير معروفة.")
-                await self.highrise.chat("خطأ: تنسيق استجابة المحفظة غير معروف.")
+                await self.reply("خطأ: تنسيق استجابة المحفظة غير معروف.")
                 return
             
-            await self.highrise.chat(f"رصيد الذهب للبوت: {gold_amount} ذهب")
+            await self.reply(f"رصيد الذهب للبوت: {gold_amount} ذهب")
             logger.info(f"رصيد البوت: {gold_amount} ذهب")
         except Exception as e:
-            await self.highrise.chat(self.get_message("wallet_error", error=str(e)))
+            await self.reply(self.get_message("wallet_error", error=str(e)))
             logger.error(f"خطأ في جلب الرصيد: {e}")
 
     async def cmd_tip(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) != 3 or not parts[1].isdigit() or parts[2] != "all":
-            await self.highrise.chat(self.get_message("invalid_format", format="!tip <العدد> all (العدد: 1، 5، 10، 50، 100)"))
+            await self.reply(self.get_message("invalid_format", format="!tip <العدد> all (العدد: 1، 5، 10، 50، 100)"))
             return
 
         try:
             tip_amount = int(parts[1])
             if tip_amount not in [1, 5, 10, 50, 100]:
-                await self.highrise.chat("يجب أن تكون كمية الذهب 1 أو 5 أو 10 أو 50 أو 100.")
+                await self.reply("يجب أن تكون كمية الذهب 1 أو 5 أو 10 أو 50 أو 100.")
                 return
 
             gold_bar_map = {
@@ -2728,7 +2833,7 @@ class AdvancedBot(BaseBot):
             }
             gold_bar_item = gold_bar_map.get(tip_amount)
             if not gold_bar_item:
-                await self.highrise.chat(f"القيمة {tip_amount} غير مدعومة.")
+                await self.reply(f"القيمة {tip_amount} غير مدعومة.")
                 return
 
             wallet = await self.highrise.get_wallet()
@@ -2740,7 +2845,7 @@ class AdvancedBot(BaseBot):
                         break
             else:
                 logger.error("بنية wallet غير معروفة.")
-                await self.highrise.chat("خطأ: تنسيق استجابة المحفظة غير معروف.")
+                await self.reply("خطأ: تنسيق استجابة المحفظة غير معروف.")
                 return
 
             active_users = [u for u in self.active_users.values() if u.id != self.user_id]
@@ -2748,7 +2853,7 @@ class AdvancedBot(BaseBot):
             total_needed = tip_amount * active_users_count
 
             if gold_amount < total_needed:
-                await self.highrise.chat(
+                await self.reply(
                     f"رصيد البوت ({gold_amount} ذهب) غير كافٍ لإرسال {tip_amount} ذهب إلى {active_users_count} مستخدم."
                 )
                 return
@@ -2763,17 +2868,17 @@ class AdvancedBot(BaseBot):
                     if hasattr(response, "error"):
                         raise Exception(f"خطأ API: {response.error}")
                     successful_tips += 1
-                    await self.highrise.chat(self.get_message("tip_success", amount=tip_amount, username=target_user.username))
+                    await self.reply(self.get_message("tip_success", amount=tip_amount, username=target_user.username))
                     logger.info(f"تم إرسال {tip_amount} ذهب إلى {target_user.username} بنجاح.")
                     await sleep(3.0)
                 except Exception as e:
-                    await self.highrise.chat(f"خطأ في إرسال الإكرامية إلى @{target_user.username}: {e}")
+                    await self.reply(f"خطأ في إرسال الإكرامية إلى @{target_user.username}: {e}")
                     logger.error(f"خطأ في إرسال الإكرامية إلى {target_user.username}: {e}")
 
             if successful_tips > 0:
-                await self.highrise.chat(self.get_message("tip_all_success", amount=tip_amount, count=successful_tips))
+                await self.reply(self.get_message("tip_all_success", amount=tip_amount, count=successful_tips))
             else:
-                await self.highrise.chat("لم يتم إرسال أي إكرامية بنجاح.")
+                await self.reply("لم يتم إرسال أي إكرامية بنجاح.")
 
             wallet = await self.highrise.get_wallet()
             gold_amount = 0
@@ -2782,155 +2887,155 @@ class AdvancedBot(BaseBot):
                     if hasattr(item, "type") and item.type == "gold" and hasattr(item, "amount"):
                         gold_amount = item.amount
                         break
-            await self.highrise.chat(f"رصيد البوت الجديد: {gold_amount} ذهب")
+            await self.reply(f"رصيد البوت الجديد: {gold_amount} ذهب")
             logger.info(f"رصيد البوت الجديد: {gold_amount} ذهب")
 
         except Exception as e:
-            await self.highrise.chat(f"خطأ غير معروف: {e}")
+            await self.reply(f"خطأ غير معروف: {e}")
             logger.error(f"خطأ في cmd_tip: {e}")
 
     async def cmd_set(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
 
         pos = self.user_positions.get(user.username.lower())
         if not pos:
-            await self.highrise.chat(f"@{user.username}: موقعك غير معروف.")
+            await self.reply(f"@{user.username}: موقعك غير معروف.")
             return
         try:
             await self.highrise.teleport(user_id=self.user_id, dest=pos)
-            await self.highrise.chat(f"تم نقل البوت إلى موقع @{user.username}.")
+            await self.reply(f"تم نقل البوت إلى موقع @{user.username}.")
             logger.info(f"تم نقل البوت إلى موقع {user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في نقل البوت: {e}")
+            await self.reply(f"خطأ في نقل البوت: {e}")
             logger.error(f"خطأ في cmd_set: {e}")
 
     async def cmd_t(self, user: User, parts: list):
         """!t - ينقل البوت إلى الإحداثيات 11.0 / 7.0 / 11.0"""
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
         try:
             dest = Position(x=11.0, y=7.0, z=11.0)
             await self.highrise.teleport(user_id=self.user_id, dest=dest)
-            await self.highrise.chat("تم نقل البوت إلى (11.0, 7.0, 11.0)")
+            await self.reply("تم نقل البوت إلى (11.0, 7.0, 11.0)")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في نقل البوت: {e}")
+            await self.reply(f"خطأ في نقل البوت: {e}")
             logger.error(f"خطأ في cmd_t: {e}")
 
     async def cmd_setstart(self, user: User, parts: list):
         """!setstart - يعرض إحداثيات مكانك جاهزة للصقها بـ settings.py كمكان ظهور البوت."""
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
         pos = self.user_positions.get(user.username.lower())
         if not pos:
-            await self.highrise.chat(f"@{user.username}: موقعك غير معروف.")
+            await self.reply(f"@{user.username}: موقعك غير معروف.")
             return
         try:
             await self.highrise.teleport(user_id=self.user_id, dest=pos)
-            await self.highrise.chat(f"📌 لتخلي هذا مكان ظهور البوت، حط هذا السطر بـ settings.py:\nSTART_POSITION = {{\"x\": {pos.x}, \"y\": {pos.y}, \"z\": {pos.z}}}")
+            await self.reply(f"📌 لتخلي هذا مكان ظهور البوت، حط هذا السطر بـ settings.py:\nSTART_POSITION = {{\"x\": {pos.x}, \"y\": {pos.y}, \"z\": {pos.z}}}")
             logger.info(f"{user.username} حدد نقطة بداية البوت: {pos.x}, {pos.y}, {pos.z}")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في حفظ نقطة البداية: {e}")
+            await self.reply(f"خطأ في حفظ نقطة البداية: {e}")
             logger.error(f"خطأ في cmd_setstart: {e}")
 
     async def cmd_vip(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
         try:
             dest_data = self.config["teleport_locations"]["vip"]
             dest = Position(x=dest_data["x"], y=dest_data["y"], z=dest_data["z"])
             await self.highrise.teleport(user_id=user.id, dest=dest)
-            await self.highrise.chat(self.get_message("teleport_success", username=user.username, location="VIP"))
+            await self.reply(self.get_message("teleport_success", username=user.username, location="VIP"))
             logger.info(f"تم نقل المستخدم {user.username} إلى VIP.")
         except Exception as e:
-            await self.highrise.chat(self.get_message("teleport_error", error=str(e)))
+            await self.reply(self.get_message("teleport_error", error=str(e)))
             logger.error(f"خطأ في cmd_vip: {e}")
 
     async def cmd_vip1(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
         try:
             dest_data = self.config["teleport_locations"]["vip1"]
             dest = Position(x=dest_data["x"], y=dest_data["y"], z=dest_data["z"])
             await self.highrise.teleport(user_id=user.id, dest=dest)
-            await self.highrise.chat(self.get_message("teleport_success", username=user.username, location="VIP1"))
+            await self.reply(self.get_message("teleport_success", username=user.username, location="VIP1"))
             logger.info(f"تم نقل المستخدم {user.username} إلى VIP1.")
         except Exception as e:
-            await self.highrise.chat(self.get_message("teleport_error", error=str(e)))
+            await self.reply(self.get_message("teleport_error", error=str(e)))
             logger.error(f"خطأ في cmd_vip1: {e}")
 
     async def cmd_dj(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
         try:
             dest_data = self.config["teleport_locations"]["dj"]
             dest = Position(x=dest_data["x"], y=dest_data["y"], z=dest_data["z"])
             await self.highrise.teleport(user_id=user.id, dest=dest)
-            await self.highrise.chat(self.get_message("teleport_success", username=user.username, location="DJ"))
+            await self.reply(self.get_message("teleport_success", username=user.username, location="DJ"))
             logger.info(f"تم نقل المستخدم {user.username} إلى DJ.")
         except Exception as e:
-            await self.highrise.chat(self.get_message("teleport_error", error=str(e)))
+            await self.reply(self.get_message("teleport_error", error=str(e)))
             logger.error(f"خطأ في cmd_dj: {e}")
 
     async def cmd_down(self, user: User, parts: list):
         try:
             dest = Position(x=2.0, y=0.5, z=1.5)
             await self.highrise.teleport(user_id=user.id, dest=dest)
-            await self.highrise.chat(f"@{user.username} نزل إلى الأسفل.")
+            await self.reply(f"@{user.username} نزل إلى الأسفل.")
             logger.info(f"تم نقل المستخدم {user.username} إلى الإحداثيات x=2, y=0.5, z=1.5.")
         except Exception as e:
-            await self.highrise.chat(self.get_message("teleport_error", error=str(e)))
+            await self.reply(self.get_message("teleport_error", error=str(e)))
             logger.error(f"خطأ في cmd_down: {e}")
 
     async def cmd_ban(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
         parts = [p.lower() for p in parts]
         if len(parts) != 2 or not parts[1].startswith("@"):
-            await self.highrise.chat(self.get_message("invalid_format", format="!ban @username"))
+            await self.reply(self.get_message("invalid_format", format="!ban @username"))
             return
         target_username = parts[1][1:].lower()
         target_user = self.active_users.get(target_username)
         if not target_user:
-            await self.highrise.chat(self.get_message("user_not_found", username=target_username))
+            await self.reply(self.get_message("user_not_found", username=target_username))
             return
         self.config["banned_users"].append(target_username)
         self.save_config()
-        await self.highrise.chat(self.get_message("ban_success", username=target_username))
+        await self.reply(self.get_message("ban_success", username=target_username))
         logger.info(f"تم حظر المستخدم {target_username} بواسطة {user.username}.")
 
     async def cmd_unban(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             logger.info(f"المستخدم {user.username} لا يملك الصلاحية لتنفيذ !unban.")
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) != 2 or not parts[1].startswith("@"):
-            await self.highrise.chat(self.get_message("invalid_format", format="!unban @username"))
+            await self.reply(self.get_message("invalid_format", format="!unban @username"))
             logger.info(f"صيغة غير صحيحة للأمر !unban من قبل {user.username}.")
             return
 
         target_username = parts[1][1:].lower()
         if target_username not in self.config["banned_users"]:
-            await self.highrise.chat(self.get_message("unban_not_banned", username=target_username))
+            await self.reply(self.get_message("unban_not_banned", username=target_username))
             logger.info(f"طلب {user.username} إلغاء حظر {target_username}، لكنه غير موجود في قائمة الحظر.")
             return
 
         try:
             self.config["banned_users"].remove(target_username)
             self.save_config()
-            await self.highrise.chat(self.get_message("unban_success", username=target_username))
+            await self.reply(self.get_message("unban_success", username=target_username))
             logger.info(f"تم إلغاء حظر المستخدم {target_username} بواسطة {user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في إلغاء حظر المستخدم @{target_username}: {str(e)}")
+            await self.reply(f"خطأ في إلغاء حظر المستخدم @{target_username}: {str(e)}")
             logger.error(f"خطأ في cmd_unban لـ {target_username}: {str(e)}")
 
     async def cmd_dancechain(self, user: User, parts: list):
@@ -2938,192 +3043,192 @@ class AdvancedBot(BaseBot):
         for emote in dance_list:
             await self.highrise.send_emote(emote, user.id)
             await sleep(self.emote_durations.get(emote, 15.0))
-        await self.highrise.chat(self.get_message("dancechain_success", username=user.username))
+        await self.reply(self.get_message("dancechain_success", username=user.username))
         logger.info(f"تم تشغيل سلسلة الرقص للمستخدم {user.username}.")
 
     async def cmd_addtele(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             return
         parts = [p.lower() for p in parts]
         if len(parts) != 2:
-            await self.highrise.chat(self.get_message("invalid_format", format="!addtele اسم_الموقع"))
+            await self.reply(self.get_message("invalid_format", format="!addtele اسم_الموقع"))
             return
         location_name = parts[1]
         pos = self.user_positions.get(user.username.lower())
         if not pos:
-            await self.highrise.chat("موقعك غير معروف!")
+            await self.reply("موقعك غير معروف!")
             return
         self.config["teleport_locations"][location_name] = {"x": pos.x, "y": pos.y, "z": pos.z}
         self.save_config()
-        await self.highrise.chat(self.get_message("addtele_success", location=location_name))
+        await self.reply(self.get_message("addtele_success", location=location_name))
         logger.info(f"تمت إضافة الموقع {location_name} بواسطة {user.username}.")
 
     async def cmd_deltele(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             logger.info(f"المستخدم {user.username} لا يملك الصلاحية لتنفيذ !deltele.")
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) != 2:
-            await self.highrise.chat(self.get_message("invalid_format", format="!deltele اسم_الموقع"))
+            await self.reply(self.get_message("invalid_format", format="!deltele اسم_الموقع"))
             logger.info(f"صيغة غير صحيحة للأمر !deltele من قبل {user.username}.")
             return
 
         location_name = parts[1]
         if location_name in ["vip", "vip1", "dj"]:
-            await self.highrise.chat(self.get_message("deltele_protected", location=location_name))
+            await self.reply(self.get_message("deltele_protected", location=location_name))
             logger.info(f"حاول المستخدم {user.username} حذف الموقع الافتراضي {location_name}.")
             return
 
         if location_name not in self.config["teleport_locations"]:
-            await self.highrise.chat(self.get_message("deltele_not_found", location=location_name))
+            await self.reply(self.get_message("deltele_not_found", location=location_name))
             logger.info(f"طلب {user.username} حذف الموقع {location_name}، لكنه غير موجود.")
             return
 
         try:
             del self.config["teleport_locations"][location_name]
             self.save_config()
-            await self.highrise.chat(self.get_message("deltele_success", location=location_name))
+            await self.reply(self.get_message("deltele_success", location=location_name))
             logger.info(f"تم حذف الموقع {location_name} بواسطة {user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في حذف الموقع {location_name}: {str(e)}")
+            await self.reply(f"خطأ في حذف الموقع {location_name}: {str(e)}")
             logger.error(f"خطأ في cmd_deltele لـ {location_name}: {str(e)}")
 
     async def cmd_set_item(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             logger.info(f"المستخدم {user.username} لا يملك الصلاحية لتنفيذ !item set.")
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) != 3 or not parts[2].startswith("@"):
-            await self.highrise.chat(self.get_message("invalid_format", format="!item set @username"))
+            await self.reply(self.get_message("invalid_format", format="!item set @username"))
             logger.info(f"صيغة غير صحيحة للأمر !item set من قبل {user.username}.")
             return
 
         target_username = parts[2][1:].lower()
         target_user = self.active_users.get(target_username)
         if not target_user:
-            await self.highrise.chat(self.get_message("user_not_found", username=target_username))
+            await self.reply(self.get_message("user_not_found", username=target_username))
             logger.info(f"لم يتم العثور على المستخدم المستهدف {target_username} (طلب {user.username}).")
             return
 
         try:
             outfit_response = await self.highrise.get_user_outfit(target_user.id)
             if not hasattr(outfit_response, "outfit") or not outfit_response.outfit:
-                await self.highrise.chat(f"خطأ: بيانات المظهر لـ @{target_username} غير متاحة.")
+                await self.reply(f"خطأ: بيانات المظهر لـ @{target_username} غير متاحة.")
                 logger.error(f"بيانات المظهر لـ {target_username} غير متاحة.")
                 return
 
             outfit_items = outfit_response.outfit
             await self.highrise.set_outfit(outfit_items)
-            await self.highrise.chat(self.get_message("set_item_success", username=target_username))
+            await self.reply(self.get_message("set_item_success", username=target_username))
             logger.info(f"تم تغيير مظهر البوت إلى عناصر {target_username}: {outfit_items}")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في تغيير مظهر البوت: {str(e)}")
+            await self.reply(f"خطأ في تغيير مظهر البوت: {str(e)}")
             logger.error(f"خطأ في cmd_set_item لـ {target_username}: {str(e)}")
 
     async def cmd_welcome(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             logger.info(f"المستخدم {user.username} لا يملك الصلاحية لتنفيذ !welcome.")
             return
 
         parts = parts[:1] + ([" ".join(parts[1:])] if len(parts) > 1 else [])
         if len(parts) < 2:
-            await self.highrise.chat(self.get_message("invalid_format", format="!welcome الرسالة"))
+            await self.reply(self.get_message("invalid_format", format="!welcome الرسالة"))
             logger.info(f"صيغة غير صحيحة للأمر !welcome من قبل {user.username}.")
             return
 
         welcome_message = parts[1]
         self.config["welcome_message"] = welcome_message
         self.save_config()
-        await self.highrise.chat(f"تم تغيير رسالة الترحيب إلى '{welcome_message}'.")
+        await self.reply(f"تم تغيير رسالة الترحيب إلى '{welcome_message}'.")
         logger.info(f"قام {user.username} بتغيير رسالة الترحيب إلى '{welcome_message}'.")
 
     async def cmd_addadmin(self, user: User, parts: list):
         if not self.is_host(user.username):
-            await self.highrise.chat("هذا الأمر متاح للـ Host فقط!")
+            await self.reply("هذا الأمر متاح للـ Host فقط!")
             logger.info(f"حاول المستخدم {user.username} تنفيذ !addadmin لكن ليس لديه صلاحية.")
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) != 2 or not parts[1].startswith("@"):
-            await self.highrise.chat(self.get_message("invalid_format", format="!addadmin @username"))
+            await self.reply(self.get_message("invalid_format", format="!addadmin @username"))
             logger.info(f"صيغة غير صحيحة للأمر !addadmin من قبل {user.username}.")
             return
 
         target_username = parts[1][1:].lower()
         if target_username in self.config["admin_usernames"]:
-            await self.highrise.chat(f"المستخدم @{target_username} مشرف بالفعل!")
+            await self.reply(f"المستخدم @{target_username} مشرف بالفعل!")
             logger.info(f"طلب {user.username} إضافة {target_username} إلى المشرفين، لكنه مشرف بالفعل.")
             return
 
         try:
             self.config["admin_usernames"].append(target_username)
             self.save_config()
-            await self.highrise.chat(f"تمت إضافة المستخدم @{target_username} إلى المشرفين بنجاح!")
+            await self.reply(f"تمت إضافة المستخدم @{target_username} إلى المشرفين بنجاح!")
             logger.info(f"تمت إضافة المستخدم {target_username} إلى المشرفين بواسطة {user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في إضافة المشرف @{target_username}: {str(e)}")
+            await self.reply(f"خطأ في إضافة المشرف @{target_username}: {str(e)}")
             logger.error(f"خطأ في cmd_addadmin لـ {target_username}: {str(e)}")
 
     async def cmd_removeadmin(self, user: User, parts: list):
         if not self.is_host(user.username):
-            await self.highrise.chat("هذا الأمر متاح للـ Host فقط!")
+            await self.reply("هذا الأمر متاح للـ Host فقط!")
             logger.info(f"حاول المستخدم {user.username} تنفيذ !removeadmin لكن ليس لديه صلاحية.")
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) != 2 or not parts[1].startswith("@"):
-            await self.highrise.chat(self.get_message("invalid_format", format="!removeadmin @username"))
+            await self.reply(self.get_message("invalid_format", format="!removeadmin @username"))
             logger.info(f"صيغة غير صحيحة للأمر !removeadmin من قبل {user.username}.")
             return
 
         target_username = parts[1][1:].lower()
         if target_username not in self.config["admin_usernames"]:
-            await self.highrise.chat(f"المستخدم @{target_username} ليس في قائمة المشرفين!")
+            await self.reply(f"المستخدم @{target_username} ليس في قائمة المشرفين!")
             logger.info(f"طلب {user.username} حذف {target_username} من المشرفين، لكنه غير موجود في القائمة.")
             return
 
         if self.is_host(target_username):
-            await self.highrise.chat(f"❌ @{target_username} يملك رتبة Host ولا يمكن حذفه من المشرفين!")
+            await self.reply(f"❌ @{target_username} يملك رتبة Host ولا يمكن حذفه من المشرفين!")
             logger.info(f"تم رفض محاولة {user.username} حذف الـ Host {target_username} من المشرفين.")
             return
 
         if target_username == "rqtm":
-            await self.highrise.chat("لا يمكنك حذف RQTM من المشرفين!")
+            await self.reply("لا يمكنك حذف RQTM من المشرفين!")
             logger.info(f"تم رفض محاولة {user.username} حذف RQTM من المشرفين.")
             return
 
         try:
             self.config["admin_usernames"].remove(target_username)
             self.save_config()
-            await self.highrise.chat(f"تم حذف المستخدم @{target_username} من المشرفين بنجاح!")
+            await self.reply(f"تم حذف المستخدم @{target_username} من المشرفين بنجاح!")
             logger.info(f"تم حذف المستخدم {target_username} من المشرفين بواسطة {user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في حذف المشرف @{target_username}: {str(e)}")
+            await self.reply(f"خطأ في حذف المشرف @{target_username}: {str(e)}")
             logger.error(f"خطأ في cmd_removeadmin لـ {target_username}: {str(e)}")
 
     async def cmd_addhost(self, user: User, parts: list):
         """⚠️ حصري: فقط المالك الأصلي للبوت (RQTM) يستطيع منح رتبة Host؛
         حتى بقية الـ Host لا يملكون صلاحية تنفيذ هذا الأمر."""
         if user.username.lower() != "rqtm":
-            await self.highrise.chat("❌ وصول غير مصرح به!")
+            await self.reply("❌ وصول غير مصرح به!")
             logger.info(f"حاول المستخدم {user.username} تنفيذ !addhost لكن ليس لديه صلاحية.")
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) != 2 or not parts[1].startswith("@"):
-            await self.highrise.chat(self.get_message("invalid_format", format="!addhost @username"))
+            await self.reply(self.get_message("invalid_format", format="!addhost @username"))
             logger.info(f"صيغة غير صحيحة للأمر !addhost من قبل {user.username}.")
             return
 
         target_username = parts[1][1:].lower()
         if target_username in self.config["host_usernames"]:
-            await self.highrise.chat(f"المستخدم @{target_username} هو Host بالفعل!")
+            await self.reply(f"المستخدم @{target_username} هو Host بالفعل!")
             return
 
         try:
@@ -3131,89 +3236,89 @@ class AdvancedBot(BaseBot):
             if target_username not in self.config["admin_usernames"]:
                 self.config["admin_usernames"].append(target_username)
             self.save_config()
-            await self.highrise.chat(f"👑 أصبح المستخدم @{target_username} Host بنجاح!")
+            await self.reply(f"👑 أصبح المستخدم @{target_username} Host بنجاح!")
             logger.info(f"تم تعيين المستخدم {target_username} كـ Host بواسطة {user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في إضافة الـ Host @{target_username}: {str(e)}")
+            await self.reply(f"خطأ في إضافة الـ Host @{target_username}: {str(e)}")
             logger.error(f"خطأ في cmd_addhost لـ {target_username}: {str(e)}")
 
     async def cmd_removehost(self, user: User, parts: list):
         """⚠️ حصري: فقط المالك الأصلي للبوت (RQTM) يستطيع سحب رتبة Host."""
         if user.username.lower() != "rqtm":
-            await self.highrise.chat("❌ وصول غير مصرح به!")
+            await self.reply("❌ وصول غير مصرح به!")
             logger.info(f"حاول المستخدم {user.username} تنفيذ !removehost لكن ليس لديه صلاحية.")
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) != 2 or not parts[1].startswith("@"):
-            await self.highrise.chat(self.get_message("invalid_format", format="!removehost @username"))
+            await self.reply(self.get_message("invalid_format", format="!removehost @username"))
             logger.info(f"صيغة غير صحيحة للأمر !removehost من قبل {user.username}.")
             return
 
         target_username = parts[1][1:].lower()
         if target_username not in self.config["host_usernames"]:
-            await self.highrise.chat(f"المستخدم @{target_username} ليس في قائمة الـ Host!")
+            await self.reply(f"المستخدم @{target_username} ليس في قائمة الـ Host!")
             return
 
         if len(self.config["host_usernames"]) <= 1:
-            await self.highrise.chat("❌ لا يمكن حذف آخر Host!")
+            await self.reply("❌ لا يمكن حذف آخر Host!")
             logger.info(f"تم رفض محاولة {user.username} حذف آخر Host ({target_username}).")
             return
 
         try:
             self.config["host_usernames"].remove(target_username)
             self.save_config()
-            await self.highrise.chat(f"تم سحب رتبة Host من المستخدم @{target_username}.")
+            await self.reply(f"تم سحب رتبة Host من المستخدم @{target_username}.")
             logger.info(f"تم سحب رتبة Host من المستخدم {target_username} بواسطة {user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في حذف الـ Host @{target_username}: {str(e)}")
+            await self.reply(f"خطأ في حذف الـ Host @{target_username}: {str(e)}")
             logger.error(f"خطأ في cmd_removehost لـ {target_username}: {str(e)}")
 
     async def cmd_listadd(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             logger.info(f"المستخدم {user.username} لا يملك الصلاحية لتنفيذ !listadd.")
             return
 
         try:
             if not self.config["admin_usernames"]:
-                await self.highrise.chat(self.get_message("listadd_empty"))
+                await self.reply(self.get_message("listadd_empty"))
                 logger.info(f"قائمة المشرفين فارغة. الطلب من {user.username}.")
                 return
             admin_list = [f"@{username}" for username in self.config["admin_usernames"]]
-            await self.highrise.chat(self.get_message("listadd_success", count=len(admin_list), admin_list="\n".join(admin_list)))
+            await self.reply(self.get_message("listadd_success", count=len(admin_list), admin_list="\n".join(admin_list)))
             logger.info(f"طلب {user.username} قائمة المشرفين: {admin_list}")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في عرض قائمة المشرفين: {str(e)}")
+            await self.reply(f"خطأ في عرض قائمة المشرفين: {str(e)}")
             logger.error(f"خطأ في cmd_listadd: {str(e)}")
 
     async def cmd_freeze(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             logger.info(f"المستخدم {user.username} لا يملك الصلاحية لتنفيذ !freeze.")
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) != 2 or not parts[1].startswith("@"):
-            await self.highrise.chat(self.get_message("invalid_format", format="!freeze @username"))
+            await self.reply(self.get_message("invalid_format", format="!freeze @username"))
             logger.info(f"صيغة غير صحيحة للأمر !freeze من قبل {user.username}.")
             return
 
         target_username = parts[1][1:].lower()
         target_user = self.active_users.get(target_username)
         if not target_user:
-            await self.highrise.chat(self.get_message("user_not_found", username=target_username))
+            await self.reply(self.get_message("user_not_found", username=target_username))
             logger.info(f"لم يتم العثور على المستخدم المستهدف {target_username} (طلب {user.username}).")
             return
 
         if target_username in self.frozen_users:
-            await self.highrise.chat(f"المستخدم @{target_username} مجمّد بالفعل.")
+            await self.reply(f"المستخدم @{target_username} مجمّد بالفعل.")
             logger.info(f"طلب {user.username} تجميد {target_username}، لكنه مجمّد بالفعل.")
             return
 
         position = self.user_positions.get(target_username)
         if not position:
-            await self.highrise.chat(f"موقع @{target_username} غير متاح.")
+            await self.reply(f"موقع @{target_username} غير متاح.")
             logger.info(f"موقع {target_username} غير متاح للتجميد (طلب {user.username}).")
             return
 
@@ -3233,24 +3338,24 @@ class AdvancedBot(BaseBot):
 
         task = create_task(freeze_loop())
         self.frozen_users[target_username] = task
-        await self.highrise.chat(self.get_message("freeze_success", username=target_username))
+        await self.reply(self.get_message("freeze_success", username=target_username))
         logger.info(f"تم تجميد المستخدم {target_username} بواسطة {user.username}.")
 
     async def cmd_unfreeze(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             logger.info(f"المستخدم {user.username} لا يملك الصلاحية لتنفيذ !unfreeze.")
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) != 2 or not parts[1].startswith("@"):
-            await self.highrise.chat(self.get_message("invalid_format", format="!unfreeze @username"))
+            await self.reply(self.get_message("invalid_format", format="!unfreeze @username"))
             logger.info(f"صيغة غير صحيحة للأمر !unfreeze من قبل {user.username}.")
             return
 
         target_username = parts[1][1:].lower()
         if target_username not in self.frozen_users:
-            await self.highrise.chat(self.get_message("unfreeze_not_frozen", username=target_username))
+            await self.reply(self.get_message("unfreeze_not_frozen", username=target_username))
             logger.info(f"طلب {user.username} إلغاء تجميد {target_username}، لكنه غير مجمّد.")
             return
 
@@ -3258,27 +3363,27 @@ class AdvancedBot(BaseBot):
             task = self.frozen_users.pop(target_username)
             task.cancel()
             await task
-            await self.highrise.chat(self.get_message("unfreeze_success", username=target_username))
+            await self.reply(self.get_message("unfreeze_success", username=target_username))
             logger.info(f"تم إلغاء تجميد المستخدم {target_username} بواسطة {user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في إلغاء تجميد @{target_username}: {str(e)}")
+            await self.reply(f"خطأ في إلغاء تجميد @{target_username}: {str(e)}")
             logger.error(f"خطأ في cmd_unfreeze لـ {target_username}: {str(e)}")
 
     async def cmd_party(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             logger.info(f"المستخدم {user.username} لا يملك الصلاحية لتنفيذ !party.")
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) != 3 or (not parts[1].startswith("@") and parts[1] != "all") or not parts[2].isdigit():
-            await self.highrise.chat(self.get_message("invalid_format", format="!party @username رقم أو !party all رقم"))
+            await self.reply(self.get_message("invalid_format", format="!party @username رقم أو !party all رقم"))
             logger.info(f"صيغة غير صحيحة للأمر !party من قبل {user.username}.")
             return
 
         dance_number = parts[2]
         if dance_number not in self.emotes:
-            await self.highrise.chat(f"الرقصة رقم {dance_number} غير موجودة!")
+            await self.reply(f"الرقصة رقم {dance_number} غير موجودة!")
             logger.info(f"الرقصة رقم {dance_number} غير صالحة (طلب {user.username}).")
             return
 
@@ -3316,16 +3421,16 @@ class AdvancedBot(BaseBot):
                     self.dance_tasks[username] = task
                     successful_dances += 1
                     await sleep(0.5)
-                await self.highrise.chat(self.get_message("party_all_success", dance_number=dance_number, count=successful_dances))
+                await self.reply(self.get_message("party_all_success", dance_number=dance_number, count=successful_dances))
                 logger.info(f"تم تفعيل الرقصة رقم {dance_number} لـ {successful_dances} مستخدم بواسطة {user.username}.")
             except Exception as e:
-                await self.highrise.chat(f"خطأ في تشغيل الرقص للجميع: {str(e)}")
+                await self.reply(f"خطأ في تشغيل الرقص للجميع: {str(e)}")
                 logger.error(f"خطأ في cmd_party all: {str(e)}")
         else:
             target_username = parts[1][1:].lower()
             target_user = self.active_users.get(target_username)
             if not target_user:
-                await self.highrise.chat(self.get_message("user_not_found", username=target_username))
+                await self.reply(self.get_message("user_not_found", username=target_username))
                 logger.info(f"لم يتم العثور على المستخدم المستهدف {target_username} (طلب {user.username}).")
                 return
             try:
@@ -3346,47 +3451,47 @@ class AdvancedBot(BaseBot):
                         logger.error(f"خطأ في حلقة الرقص للمستخدم {target_username}: {e}")
                 task = create_task(dance_loop())
                 self.dance_tasks[target_username] = task
-                await self.highrise.chat(self.get_message("party_success", dance_number=dance_number, username=target_username))
+                await self.reply(self.get_message("party_success", dance_number=dance_number, username=target_username))
                 logger.info(f"تم تفعيل الرقصة رقم {dance_number} للمستخدم {target_username} بواسطة {user.username}.")
             except Exception as e:
-                await self.highrise.chat(f"خطأ في تشغيل الرقص للمستخدم @{target_username}: {str(e)}")
+                await self.reply(f"خطأ في تشغيل الرقص للمستخدم @{target_username}: {str(e)}")
                 logger.error(f"خطأ في cmd_party لـ {target_username}: {str(e)}")
 
     async def cmd_partys(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
-            await self.highrise.chat(self.get_message("no_permission"))
+            await self.reply(self.get_message("no_permission"))
             logger.info(f"المستخدم {user.username} لا يملك الصلاحية لتنفيذ !partys.")
             return
 
         parts = [p.lower() for p in parts]
         if len(parts) != 2 or not parts[1].startswith("@"):
-            await self.highrise.chat(self.get_message("invalid_format", format="!partys @username"))
+            await self.reply(self.get_message("invalid_format", format="!partys @username"))
             logger.info(f"صيغة غير صحيحة للأمر !partys من قبل {user.username}.")
             return
 
         target_username = parts[1][1:].lower()
         if target_username not in self.party_dances:
-            await self.highrise.chat(self.get_message("partys_not_dancing", username=target_username))
+            await self.reply(self.get_message("partys_not_dancing", username=target_username))
             logger.info(f"طلب {user.username} إيقاف رقص {target_username}، لكنه ليس في وضع الرقص الإجباري.")
             return
 
         try:
             await self.stop_dance(self.active_users[target_username])
             self.party_dances.pop(target_username, None)
-            await self.highrise.chat(self.get_message("partys_success", username=target_username))
+            await self.reply(self.get_message("partys_success", username=target_username))
             logger.info(f"تم إيقاف الرقص الإجباري للمستخدم {target_username} بواسطة {user.username}.")
         except Exception as e:
-            await self.highrise.chat(f"خطأ في إيقاف الرقص للمستخدم @{target_username}: {str(e)}")
+            await self.reply(f"خطأ في إيقاف الرقص للمستخدم @{target_username}: {str(e)}")
             logger.error(f"خطأ في cmd_partys لـ {target_username}: {str(e)}")
 
     async def cmd_loopchat(self, user: User, parts: list):
         admins_lower = [admin.lower() for admin in self.config.get("admin_usernames", [])]
         if user.username.lower() not in admins_lower:
-            await self.highrise.chat("❌ هذا الأمر مخصص لمشرفي البوت!")
+            await self.reply("❌ هذا الأمر مخصص لمشرفي البوت!")
             return
 
         if len(parts) < 2:
-            await self.highrise.chat("⚠️ صيغة غير صحيحة! الاستخدام: !loopchat رسالتك")
+            await self.reply("⚠️ صيغة غير صحيحة! الاستخدام: !loopchat رسالتك")
             return
 
         # خذ كل النص بعد !loopchat
@@ -3396,7 +3501,7 @@ class AdvancedBot(BaseBot):
         if hasattr(self, 'loopchat_task') and self.loopchat_task:
             self.loopchat_task.cancel()
         
-        await self.highrise.chat(f"✅ تم تفعيل وضع التكرار! الرسالة: {loop_message}")
+        await self.reply(f"✅ تم تفعيل وضع التكرار! الرسالة: {loop_message}")
         logger.info(f"تم تفعيل loopchat بواسطة {user.username}: {loop_message}")
         
         # بدء حلقة إرسال الرسائل
@@ -3415,11 +3520,11 @@ class AdvancedBot(BaseBot):
     async def cmd_emotebot(self, user: User, parts: list):
         admins_lower = [admin.lower() for admin in self.config.get("admin_usernames", [])]
         if user.username.lower() not in admins_lower:
-            await self.highrise.chat("❌ هذا الأمر مخصص لمشرفي البوت!")
+            await self.reply("❌ هذا الأمر مخصص لمشرفي البوت!")
             return
 
         if len(parts) < 2:
-            await self.highrise.chat("⚠️ صيغة خاطئة! أدخل اسم الرقصة أو رقمها. مثال: !emotebot kpop")
+            await self.reply("⚠️ صيغة خاطئة! أدخل اسم الرقصة أو رقمها. مثال: !emotebot kpop")
             return
 
         input_emote = parts[1].strip().lower()
@@ -3431,10 +3536,10 @@ class AdvancedBot(BaseBot):
             actual_emote_name = input_emote
 
         if not actual_emote_name:
-            await self.highrise.chat("❌ لم يتم العثور على الرقصة أو الرقم في قائمة رقصات البوت!")
+            await self.reply("❌ لم يتم العثور على الرقصة أو الرقم في قائمة رقصات البوت!")
             return
 
-        await self.highrise.chat(f"✅ تم ضبط رقصة البوت على التكرار الدائم (Loop): [{input_emote}]")
+        await self.reply(f"✅ تم ضبط رقصة البوت على التكرار الدائم (Loop): [{input_emote}]")
         logger.info(f"تم تغيير رقصة البوت المستمرة إلى {actual_emote_name} بواسطة {user.username}.")
         self.start_bot_emote_loop(actual_emote_name)
 

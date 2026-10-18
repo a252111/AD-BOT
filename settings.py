@@ -138,3 +138,20 @@ MAFIA_ROLE_NAMES = {
     "detective": "🕵️ محقق",
     "citizen": "👤 مواطن",
 }
+
+
+# =====================================================================
+# 💬 Yardım menüsü ve özel komut sistemi  /  قائمة المساعدة والأوامر الخاصة
+# =====================================================================
+# Tüm "!" komutları artık SADECE bota fısıldayarak (whisper) veya özel mesajla çalışır.
+# Genel sohbette yazılan "!" komutları yok sayılır (sohbet temiz kalır).
+# Bota fısıldayıp !help yazınca menü açılır: 1 = Kurucu, 2 = Moderatör, 3 = Üye.
+
+# Yardım menüsünün dili: sadece Arapça
+# (metinleri değiştirmek istersen help_texts.py dosyasını aç)
+HELP_LANGUAGE = "ar"
+
+# True  = biri sohbette "!" ile komut yazarsa bot ona özelden kısa bir ipucu fısıldar
+#         (dakikada en fazla 1 kere, sohbette hiçbir şey görünmez)
+# False = tamamen sessiz kalır
+PUBLIC_COMMAND_HINT = True
