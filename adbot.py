@@ -1304,9 +1304,13 @@ class AdvancedBot(BaseBot):
         try:
             sp = START_POSITION
             dest = Position(x=sp["x"], y=sp["y"], z=sp["z"])
+            # ننقل البوت مرتين: أول مرة مباشرة، وثانية بعد ثانيتين، لأن الغرفة أحيانًا
+            # تعيد البوت لمكان الظهور الافتراضي إذا انتقل قبل ما يكتمل دخوله
             await self.highrise.teleport(user_id=self.user_id, dest=dest)
-            await self.highrise.chat("تم نقل البوت إلى الموقع الابتدائي!")
-            logger.info("تم نقل البوت إلى الموقع الأولي.")
+            await sleep(2)
+            await self.highrise.teleport(user_id=self.user_id, dest=dest)
+            await self.highrise.chat(f"تم نقل البوت إلى الموقع الابتدائي! ({sp['x']}, {sp['y']}, {sp['z']})")
+            logger.info(f"تم نقل البوت إلى الموقع الأولي: {sp}")
         except Exception as e:
             logger.error(f"خطأ في النقل الأولي: {e}")
             await self.highrise.chat(f"خطأ في النقل الأولي: {e}")
