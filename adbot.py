@@ -4,6 +4,7 @@ from asyncio import sleep, create_task, CancelledError
 from urllib.parse import urlparse, parse_qs
 import asyncio
 import os
+import re
 import json
 import logging
 from datetime import datetime, timedelta
@@ -39,6 +40,76 @@ DEFAULT_CONFIG = {
     "announcement_message": "لاستئجار البوت، راسلوا @RQTM!"
 }
 
+# ============================ مسابقة المعلومات (باللهجة العراقية) ============================
+QUIZ_TIMEOUT = 30  # عدد الثواني لكل سؤال
+QUIZ_SCORES_FILE = "quiz_scores.json"
+
+QUIZ_INTROS = [
+    "🎉 يلا شباب! تبدي مسابقة المعلومات - {rounds} أسئلة، شوفوا شغلكم! 🧠",
+    "🔥 هلا والله! نبدي المسابقة، {rounds} أسئلة، اللي يجاوب أول واحد يربح نقطة 💪",
+    "🧠 ركزوا يا أبطال! المسابقة بدت، عدنا {rounds} أسئلة وما ننطي مجال! 😎",
+]
+
+QUIZ_CORRECT = [
+    "🎉 عفية عليك @{user}! جواب صح، ربحت نقطة 👏 (مجموعك: {points})",
+    "👏 عاشت إيدك @{user}! هذا الجواب الصحيح، نقطة إلك 🔥 (مجموعك: {points})",
+    "😍 يا بطل @{user}! طلعت ذكي، نقطة إلك ✨ (مجموعك: {points})",
+    "💪 دوم الشاطر @{user}! جاوب صح وأخذ النقطة (مجموعك: {points})",
+]
+
+QUIZ_TIMEOUT_MSG = [
+    "⌛ خلص الوقت وماكو أحد جاوب! الجواب هو: {answer} 😅",
+    "😂 شنو هاي؟ ولا واحد عرف! الجواب: {answer}",
+    "⏰ انتهى الوقت يا جماعة، الجواب كان: {answer} 🙈",
+]
+
+# (السؤال، [الإجابات المقبولة]) - الإجابات لازم تكون كلمات (مو أرقام) حتى ما تتعارض مع أرقام الرقصات
+QUIZ_QUESTIONS = [
+    ("شنو عاصمة العراق؟", ["بغداد"]),
+    ("شنو اسم النهر اللي يمر ببغداد؟", ["دجلة", "نهر دجلة"]),
+    ("أي مدينة عراقية بيها الملوية المشهورة؟", ["سامراء"]),
+    ("شنو المدينة اللي بيها مرقد الإمام الحسين (ع)؟", ["كربلاء"]),
+    ("شنو المدينة اللي ينقال إلها ثغر العراق الباسم؟", ["البصرة"]),
+    ("شنو المحافظة العراقية اللي مركزها الموصل؟", ["نينوى"]),
+    ("شنو اسم أكبر بحيرة بالعراق؟", ["الثرثار", "بحيرة الثرثار"]),
+    ("شنو العملة الرسمية للعراق؟", ["دينار", "الدينار", "الدينار العراقي", "دينار عراقي"]),
+    ("شنو اسم السمك المشوي المشهور ببغداد؟", ["مسكوف", "المسكوف", "سمك مسكوف"]),
+    ("شنو اسم الأكلة العراقية اللي تنلف بورق العنب؟", ["دولمة", "الدولمة"]),
+    ("شنو اسم الكأس الصغير اللي نشرب بيه الشاي بالعراق؟", ["استكان", "الاستكان"]),
+    ("منو الملك البابلي المشهور بشريعته وقانونه؟", ["حمورابي"]),
+    ("منو الحضارة اللي بنت الزقورة بمدينة أور؟", ["السومريين", "السومريون", "سومر", "سومري", "السومرية"]),
+    ("منو المطرب اللي يلقبونه قيصر الأغنية العربية؟", ["كاظم الساهر", "كاظم"]),
+    ("منو قائد منتخب العراق اللي رفع كأس آسيا 2007؟", ["يونس محمود", "يونس"]),
+    ("شنو اسم الجبل اللي رست عليه سفينة نوح حسب القرآن؟", ["الجودي", "جبل الجودي"]),
+    ("شنو عاصمة مصر؟", ["القاهرة"]),
+    ("شنو عاصمة السعودية؟", ["الرياض"]),
+    ("شنو عاصمة الأردن؟", ["عمان"]),
+    ("شنو عاصمة لبنان؟", ["بيروت"]),
+    ("شنو عاصمة المغرب؟", ["الرباط"]),
+    ("شنو عاصمة تركيا؟", ["أنقرة"]),
+    ("شنو عاصمة فرنسا؟", ["باريس"]),
+    ("شنو عاصمة اليابان؟", ["طوكيو"]),
+    ("شنو أكبر قارة بالعالم؟", ["آسيا"]),
+    ("شنو أكبر محيط بالعالم؟", ["الهادي", "المحيط الهادي", "الهادئ", "المحيط الهادئ"]),
+    ("شنو أكبر كوكب بالمجموعة الشمسية؟", ["المشتري", "كوكب المشتري"]),
+    ("شنو أصغر كوكب بالمجموعة الشمسية؟", ["عطارد", "كوكب عطارد"]),
+    ("شنو أكبر صحراء حارة بالعالم؟", ["الصحراء الكبرى", "الكبرى"]),
+    ("شنو أطول برج بالعالم؟", ["برج خليفة", "خليفة"]),
+    ("شنو الغاز اللي نتنفسه حتى نعيش؟", ["الأوكسجين", "الاكسجين", "أكسجين", "اوكسجين"]),
+    ("شنو الحيوان اللي يسمونه سفينة الصحراء؟", ["الجمل", "جمل"]),
+    ("شنو الحيوان اللي يسمونه ملك الغابة؟", ["الأسد", "أسد"]),
+    ("شنو أسرع حيوان بري بالعالم؟", ["الفهد", "فهد", "الشيتا", "شيتا"]),
+    ("شنو أكبر حيوان بالعالم؟", ["الحوت الأزرق", "الحوت", "حوت أزرق", "حوت"]),
+    ("شنو الحيوان اللي يسوي العسل؟", ["النحلة", "النحل", "نحلة", "نحل"]),
+    ("شنو اللون اللي يطلع من خلط الأحمر والأزرق؟", ["بنفسجي", "ارجواني", "أرجواني"]),
+    ("منو أول إنسان على الأرض حسب الأديان؟", ["آدم", "سيدنا آدم"]),
+    ("شنو الشهر اللي يصومون بيه المسلمين؟", ["رمضان", "شهر رمضان"]),
+    ("منو كاتب مسرحية روميو وجولييت؟", ["شكسبير", "وليم شكسبير", "ويليام شكسبير"]),
+    ("لغز: شنو اللي إله عين وما يشوف؟", ["الإبرة", "إبرة"]),
+    ("لغز: شنو اللي كل ما نقصنا منه يكبر؟", ["الحفرة", "حفرة"]),
+    ("لغز: شنو اللي يمشي بلا رجلين ويبجي بلا عيون؟", ["الغيمة", "غيمة", "السحابة", "سحابة", "الغيم"]),
+]
+
 class AdvancedBot(BaseBot):
     def __init__(self):
         super().__init__()
@@ -54,6 +125,11 @@ class AdvancedBot(BaseBot):
         self.loopchat_task = None
         self.frozen_users = {}
         self.party_dances = {}
+        self.quiz_task = None
+        self.quiz_current = None
+        self.quiz_session = {}
+        self.quiz_scores = {}
+        self.load_quiz_scores()
         self.commands = {
             "!help": self.cmd_help,
             "!spam": self.cmd_spam,
@@ -88,7 +164,13 @@ class AdvancedBot(BaseBot):
             "!partys": self.cmd_partys,
             "!emotebot": self.cmd_emotebot,
             "!emote": self.cmd_emote_link,
-            "!loopchat": self.cmd_loopchat
+            "!loopchat": self.cmd_loopchat,
+            "!quiz": self.cmd_quiz,
+            "!مسابقة": self.cmd_quiz,
+            "!quizstop": self.cmd_quizstop,
+            "!ايقاف_المسابقة": self.cmd_quizstop,
+            "!top": self.cmd_top,
+            "!المتصدرين": self.cmd_top
         }
         self.emotes = {
             "1": "idle_zombie",
@@ -1182,6 +1264,11 @@ class AdvancedBot(BaseBot):
             self.dance_tasks.clear()
             self.user_dances.clear()
             self.party_dances.clear()
+
+            if self.quiz_task and not self.quiz_task.done():
+                self.quiz_task.cancel()
+            self.quiz_task = None
+            self.quiz_current = None
             
             for username, task in self.frozen_users.items():
                 if not task.done():
@@ -1337,6 +1424,19 @@ class AdvancedBot(BaseBot):
         try:
             self.user_scores[username] = self.user_scores.get(username, 0) + 2
 
+            # 🧠 فحص جواب مسابقة المعلومات قبل أي شيء (حتى لا يتحول الجواب إلى رقصة)
+            if (self.quiz_current and self.quiz_current["winner"] is None
+                    and not msg.startswith("!")
+                    and self.quiz_norm(msg) in self.quiz_current["answers"]):
+                self.quiz_current["winner"] = user.username
+                entry = self.quiz_scores.setdefault(username, {"name": user.username, "points": 0})
+                entry["name"] = user.username
+                entry["points"] += 1
+                self.quiz_session[username] = self.quiz_session.get(username, 0) + 1
+                self.save_quiz_scores()
+                self.quiz_current["event"].set()
+                return
+
             if msg_lower in self.emotes:
                 await self.start_dance(user, self.emotes[msg_lower])
             elif msg_lower in ["stop", "ستوب", "توقف", "قف"]:
@@ -1477,6 +1577,127 @@ class AdvancedBot(BaseBot):
         await self.highrise.chat(f"✅ بدأت الرقصة [{emote_id}] وتم تثبيتها! للإيقاف اكتب: stop")
         logger.info(f"شغّل المستخدم {user.username} الرقصة المخصصة {emote_id} عبر الرابط.")
 
+    # ====================== مسابقة المعلومات ======================
+    @staticmethod
+    def quiz_norm(text: str) -> str:
+        """توحيد النص (حذف التشكيل، توحيد الهمزات والتاء المربوطة والياء، حذف المسافات وأل التعريف)."""
+        text = str(text).lower().strip()
+        text = re.sub("[\u0610-\u061a\u064b-\u065f\u0670\u0640\u200c]", "", text)
+        mapping = {
+            "أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا",
+            "ى": "ي", "ئ": "ي", "ؤ": "و", "ة": "ه",
+            "\u06af": "ك", "\u0686": "ك", "\u06a9": "ك",  # حروف الكاف المنقوطة في اللهجة العراقية -> ك
+            "\u067e": "ب", "\u06cc": "ي",
+        }
+        text = "".join(mapping.get(ch, ch) for ch in text)
+        text = re.sub(r"[\s\u060c\u061f?!.,;:'\"()\-]+", "", text)
+        if text.startswith("ال") and len(text) > 3:
+            text = text[2:]
+        return text
+
+    def load_quiz_scores(self):
+        try:
+            if os.path.exists(QUIZ_SCORES_FILE):
+                with open(QUIZ_SCORES_FILE, "r", encoding="utf-8") as f:
+                    self.quiz_scores = json.load(f)
+        except Exception as e:
+            logger.error(f"خطأ في تحميل نقاط المسابقة: {e}")
+            self.quiz_scores = {}
+
+    def save_quiz_scores(self):
+        try:
+            with open(QUIZ_SCORES_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.quiz_scores, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"خطأ في حفظ نقاط المسابقة: {e}")
+
+    async def run_quiz(self, rounds: int):
+        self.quiz_session = {}
+        try:
+            await self.highrise.chat(random.choice(QUIZ_INTROS).format(rounds=rounds))
+            await sleep(4)
+            questions = random.sample(QUIZ_QUESTIONS, rounds)
+            for number, (question, answers) in enumerate(questions, 1):
+                event = asyncio.Event()
+                self.quiz_current = {
+                    "answers": {self.quiz_norm(a) for a in answers},
+                    "event": event,
+                    "winner": None,
+                }
+                await self.highrise.chat(f"🧠 السؤال {number}/{rounds}: {question}\n⏳ عدكم {QUIZ_TIMEOUT} ثانية!")
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=QUIZ_TIMEOUT)
+                    winner = self.quiz_current["winner"]
+                    points = self.quiz_scores.get(winner.lower(), {}).get("points", 1)
+                    await self.highrise.chat(random.choice(QUIZ_CORRECT).format(user=winner, points=points))
+                except asyncio.TimeoutError:
+                    await self.highrise.chat(random.choice(QUIZ_TIMEOUT_MSG).format(answer=answers[0]))
+                finally:
+                    self.quiz_current = None
+                await sleep(4)
+
+            if self.quiz_session:
+                ranking = sorted(
+                    self.quiz_session.items(),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )[:3]
+                medals = ["🥇", "🥈", "🥉"]
+                lines = ["🏆 خلصت المسابقة! النتيجة:"]
+                for index, (name, pts) in enumerate(ranking):
+                    display = self.quiz_scores.get(name, {}).get("name", name)
+                    lines.append(f"{medals[index]} @{display} - {pts} نقطة")
+                lines.append("عاشت إيديكم كلكم! 👏")
+                await self.highrise.chat("\n".join(lines))
+            else:
+                await self.highrise.chat("😅 خلصت المسابقة وماكو أحد جاوب ولا سؤال! المرة الجاية ركزوا شوية.")
+        except CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"خطأ في المسابقة: {e}")
+        finally:
+            self.quiz_current = None
+
+    async def cmd_quiz(self, user: User, parts: list):
+        if user.username.lower() not in self.config["admin_usernames"]:
+            await self.highrise.chat(self.get_message("no_permission"))
+            return
+        if self.quiz_task and not self.quiz_task.done():
+            await self.highrise.chat("⚠️ المسابقة شغالة هسه! اكتب !quizstop إذا تريد توقفها.")
+            return
+        rounds = 5
+        if len(parts) > 1:
+            try:
+                rounds = int(parts[1])
+            except ValueError:
+                await self.highrise.chat(self.get_message("invalid_format", format="!quiz [العدد]"))
+                return
+        rounds = max(1, min(rounds, len(QUIZ_QUESTIONS)))
+        self.quiz_task = create_task(self.run_quiz(rounds))
+        logger.info(f"بدأ {user.username} مسابقة من {rounds} أسئلة.")
+
+    async def cmd_quizstop(self, user: User, parts: list):
+        if user.username.lower() not in self.config["admin_usernames"]:
+            await self.highrise.chat(self.get_message("no_permission"))
+            return
+        if self.quiz_task and not self.quiz_task.done():
+            self.quiz_task.cancel()
+            self.quiz_current = None
+            await self.highrise.chat("🛑 انوقفت المسابقة. نشوفكم بجولة ثانية! 👋")
+        else:
+            await self.highrise.chat("ماكو مسابقة شغالة هسه.")
+
+    async def cmd_top(self, user: User, parts: list):
+        if not self.quiz_scores:
+            await self.highrise.chat("📊 للحين ماكو أحد عنده نقاط، اطلبوا من المشرف يبدي مسابقة! 🧠")
+            return
+        ranking = sorted(self.quiz_scores.values(), key=lambda e: e["points"], reverse=True)[:5]
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+        lines = ["🏆 متصدرين المسابقة:"]
+        for index, entry in enumerate(ranking):
+            lines.append(f"{medals[index]} @{entry['name']} - {entry['points']} نقطة")
+        await self.highrise.chat("\n".join(lines))
+
     async def cmd_help(self, user: User, parts: list):
         help_text = (
             "أوامر البوت:\n"
@@ -1522,7 +1743,10 @@ class AdvancedBot(BaseBot):
             "!unfreeze @username - إلغاء تجميد المستخدم\n"
             "!party @username رقم - تشغيل رقص إجباري للمستخدم\n"
             "!party all رقم - تشغيل الرقص للجميع\n"
-            "!partys @username - إيقاف الرقص الإجباري للمستخدم\n\n"
+            "!partys @username - إيقاف الرقص الإجباري للمستخدم\n"
+            "!quiz [العدد] - بدء مسابقة المعلومات (للمشرفين)\n"
+            "!quizstop - إيقاف المسابقة (للمشرفين)\n"
+            "!top - عرض المتصدرين\n\n"
             "📩 لمزيد من المعلومات راسل @RQTM!"
         )
         for chunk in [help_text[i:i+200] for i in range(0, len(help_text), 200)]:
