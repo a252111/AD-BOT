@@ -80,7 +80,6 @@ DEFAULT_CONFIG = {
         "vip1": {"x": 14.5, "y": 16.75, "z": 5.5},
         "dj": {"x": 9.5, "y": 10.75, "z": 10.5}
     },
-    "start_position": dict(START_POSITION),
     "language": "ar",
     "welcome_message": "✨ أهلاً وسهلاً {username} ❤️ نورتنا!\n🕺 استخدم الأرقام (1-256) أو أسماء الحركات للرقص!\n👑 تم تطوير البوت بواسطة @RQTM 😉\n 🚀",
     "announcement_interval": 300,
@@ -1303,7 +1302,7 @@ class AdvancedBot(BaseBot):
             return
 
         try:
-            sp = self.config.get("start_position", START_POSITION)
+            sp = START_POSITION
             dest = Position(x=sp["x"], y=sp["y"], z=sp["z"])
             await self.highrise.teleport(user_id=self.user_id, dest=dest)
             await self.highrise.chat("تم نقل البوت إلى الموقع الابتدائي!")
@@ -2806,7 +2805,7 @@ class AdvancedBot(BaseBot):
             logger.error(f"خطأ في cmd_set: {e}")
 
     async def cmd_setstart(self, user: User, parts: list):
-        """!setstart - يحفظ مكانك الحالي كنقطة بداية دائمة للبوت (يروح لها كل ما يدخل الغرفة)."""
+        """!setstart - يعرض إحداثيات مكانك جاهزة للصقها بـ settings.py كمكان ظهور البوت."""
         if user.username.lower() not in self.config["admin_usernames"]:
             await self.highrise.chat(self.get_message("no_permission"))
             return
@@ -2815,10 +2814,8 @@ class AdvancedBot(BaseBot):
             await self.highrise.chat(f"@{user.username}: موقعك غير معروف.")
             return
         try:
-            self.config["start_position"] = {"x": pos.x, "y": pos.y, "z": pos.z}
-            self.save_config()
             await self.highrise.teleport(user_id=self.user_id, dest=pos)
-            await self.highrise.chat("✅ تم حفظ مكانك كنقطة بداية للبوت!")
+            await self.highrise.chat(f"📌 لتخلي هذا مكان ظهور البوت، حط هذا السطر بـ settings.py:\nSTART_POSITION = {{\"x\": {pos.x}, \"y\": {pos.y}, \"z\": {pos.z}}}")
             logger.info(f"{user.username} حدد نقطة بداية البوت: {pos.x}, {pos.y}, {pos.z}")
         except Exception as e:
             await self.highrise.chat(f"خطأ في حفظ نقطة البداية: {e}")
