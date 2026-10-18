@@ -109,6 +109,7 @@ class AdvancedBot(BaseBot):
         self.bot_emote_name = None
         self.mafia = None
         self.mafia_task = None
+        self.spawn_task = None
         self.quiz_scores = {}
         self.load_quiz_scores()
         self.commands = {
@@ -1302,33 +1303,50 @@ class AdvancedBot(BaseBot):
             await self.highrise.chat("❌ تعذر العثور على معرّف البوت.")
             return
 
-        try:
-            sp = START_POSITION
-            dest = Position(x=sp["x"], y=sp["y"], z=sp["z"])
-            # ننقل البوت مرتين: أول مرة مباشرة، وثانية بعد ثانيتين، لأن الغرفة أحيانًا
-            # تعيد البوت لمكان الظهور الافتراضي إذا انتقل قبل ما يكتمل دخوله
-            await self.highrise.teleport(user_id=self.user_id, dest=dest)
-            await sleep(2)
-            await self.highrise.teleport(user_id=self.user_id, dest=dest)
-            await self.highrise.chat(f"تم نقل البوت إلى الموقع الابتدائي! ({sp['x']}, {sp['y']}, {sp['z']})")
-            logger.info(f"تم نقل البوت إلى الموقع الأولي: {sp}")
-            if SHOW_SPAWN_DEBUG:
-                await sleep(1)
-                room_users = await self.highrise.get_room_users()
-                for u, pos in room_users.content:
-                    if u.id == self.user_id:
-                        if hasattr(pos, "x"):
-                            await self.highrise.chat(f"📍 مكان البوت الفعلي: ({pos.x}, {pos.y}, {pos.z})")
-                        else:
-                            await self.highrise.chat("📍 البوت جالس على عنصر (مو واقف بإحداثيات عادية)")
-                        break
-        except Exception as e:
-            logger.error(f"خطأ في النقل الأولي: {e}")
-            await self.highrise.chat(f"خطأ في النقل الأولي: {e}")
+        self.spawn_task = create_task(self.spawn_bot())
 
         await self.sync_room_users()
         self.announcement_task = create_task(self.announcement_loop())
         self.score_update_task = create_task(self.score_update_loop())
+
+    async def get_bot_position(self):
+        """يرجع مكان البوت الفعلي من الغرفة (أو None)."""
+        room_users = await self.highrise.get_room_users()
+        for u, pos in room_users.content:
+            if u.id == self.user_id:
+                return pos
+        return None
+
+    async def spawn_bot(self):
+        """ينقل البوت لمكان الظهور ويتأكد أن الانتقال نجح فعلًا، ويعيد المحاولة إذا الغرفة رجعته."""
+        sp = START_POSITION
+        dest = Position(x=sp["x"], y=sp["y"], z=sp["z"])
+        pos = None
+        try:
+            for attempt in range(1, 7):
+                await sleep(2 if attempt == 1 else 3)
+                try:
+                    await self.highrise.teleport(user_id=self.user_id, dest=dest)
+                    await sleep(1.5)
+                    pos = await self.get_bot_position()
+                except Exception as e:
+                    logger.error(f"خطأ في نقل البوت (محاولة {attempt}): {e}")
+                    continue
+                if pos is not None and hasattr(pos, "x"):
+                    logger.info(f"محاولة {attempt}: مكان البوت ({pos.x}, {pos.y}, {pos.z})")
+                    if (abs(pos.x - sp["x"]) <= 0.6 and abs(pos.z - sp["z"]) <= 0.6
+                            and abs(pos.y - sp["y"]) <= 1.0):
+                        await self.highrise.chat("✅ تم نقل البوت إلى الموقع الابتدائي!")
+                        return
+            if SHOW_SPAWN_DEBUG:
+                if pos is not None and hasattr(pos, "x"):
+                    await self.highrise.chat(f"⚠️ ما نجح النقل للمكان المحدد. مكان البوت الفعلي: ({pos.x}, {pos.y}, {pos.z})")
+                else:
+                    await self.highrise.chat("⚠️ ما قدرت أتأكد من مكان البوت.")
+        except CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"خطأ في النقل الأولي: {e}")
 
     async def on_user_join(self, user: User, position: Position):
         username = user.username.lower()
