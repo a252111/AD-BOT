@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 # تنظیمات پیش‌فرض
 CONFIG_FILE = "bot_config.json"
 DEFAULT_CONFIG = {
-    "host_usernames": ["ad0ri"],
-    "admin_usernames": ["ad0ri"],
+    "host_usernames": ["RQTM"],
+    "admin_usernames": ["RQTM"],
     "vip_usernames": [],
     "banned_users": [],
     "teleport_locations": {
@@ -34,9 +34,9 @@ DEFAULT_CONFIG = {
         "dj": {"x": 9.5, "y": 10.75, "z": 10.5}
     },
     "language": "ar",
-    "welcome_message": "✨ أهلاً وسهلاً {username} ❤️ نورتنا!\n🕺 استخدم الأرقام (1-256) أو أسماء الحركات للرقص!\n👑 تم تطوير البوت بواسطة @ad0ri 😉\n📺 اشتركوا في يوتيوب: @adori_hitotso 🚀",
+    "welcome_message": "✨ أهلاً وسهلاً {username} ❤️ نورتنا!\n🕺 استخدم الأرقام (1-256) أو أسماء الحركات للرقص!\n👑 تم تطوير البوت بواسطة @RQTM 😉\n 🚀",
     "announcement_interval": 300,
-    "announcement_message": "لاستئجار البوت، راسلوا @ad0ri!"
+    "announcement_message": "لاستئجار البوت، راسلوا @RQTM!"
 }
 
 class AdvancedBot(BaseBot):
