@@ -26,6 +26,7 @@ from settings import (
     QUIZ_QUESTIONS,
     QUIZ_DEFAULT_ROUNDS,
     START_POSITION,
+    SHOW_SPAWN_DEBUG,
     ROOM_ID,
     API_TOKEN,
     MAFIA_MIN_PLAYERS,
@@ -1311,6 +1312,16 @@ class AdvancedBot(BaseBot):
             await self.highrise.teleport(user_id=self.user_id, dest=dest)
             await self.highrise.chat(f"تم نقل البوت إلى الموقع الابتدائي! ({sp['x']}, {sp['y']}, {sp['z']})")
             logger.info(f"تم نقل البوت إلى الموقع الأولي: {sp}")
+            if SHOW_SPAWN_DEBUG:
+                await sleep(1)
+                room_users = await self.highrise.get_room_users()
+                for u, pos in room_users.content:
+                    if u.id == self.user_id:
+                        if hasattr(pos, "x"):
+                            await self.highrise.chat(f"📍 مكان البوت الفعلي: ({pos.x}, {pos.y}, {pos.z})")
+                        else:
+                            await self.highrise.chat("📍 البوت جالس على عنصر (مو واقف بإحداثيات عادية)")
+                        break
         except Exception as e:
             logger.error(f"خطأ في النقل الأولي: {e}")
             await self.highrise.chat(f"خطأ في النقل الأولي: {e}")
