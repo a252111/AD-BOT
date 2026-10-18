@@ -26,7 +26,6 @@ from settings import (
     QUIZ_QUESTIONS,
     QUIZ_DEFAULT_ROUNDS,
     START_POSITION,
-    SHOW_SPAWN_DEBUG,
     ROOM_ID,
     API_TOKEN,
     MAFIA_MIN_PLAYERS,
@@ -109,7 +108,6 @@ class AdvancedBot(BaseBot):
         self.bot_emote_name = None
         self.mafia = None
         self.mafia_task = None
-        self.spawn_task = None
         self.quiz_scores = {}
         self.load_quiz_scores()
         self.commands = {
@@ -123,6 +121,7 @@ class AdvancedBot(BaseBot):
             "!thumbs": self.cmd_thumbs,
             "!wallet": self.cmd_wallet,
             "!set": self.cmd_set,
+            "!t": self.cmd_t,
             "!setstart": self.cmd_setstart,
             "!tip": self.cmd_tip,
             "!vip": self.cmd_vip,
@@ -1303,50 +1302,19 @@ class AdvancedBot(BaseBot):
             await self.highrise.chat("❌ تعذر العثور على معرّف البوت.")
             return
 
-        self.spawn_task = create_task(self.spawn_bot())
+        try:
+            sp = START_POSITION
+            dest = Position(x=sp["x"], y=sp["y"], z=sp["z"])
+            await self.highrise.teleport(user_id=self.user_id, dest=dest)
+            await self.highrise.chat("تم نقل البوت إلى الموقع الابتدائي!")
+            logger.info("تم نقل البوت إلى الموقع الأولي.")
+        except Exception as e:
+            logger.error(f"خطأ في النقل الأولي: {e}")
+            await self.highrise.chat(f"خطأ في النقل الأولي: {e}")
 
         await self.sync_room_users()
         self.announcement_task = create_task(self.announcement_loop())
         self.score_update_task = create_task(self.score_update_loop())
-
-    async def get_bot_position(self):
-        """يرجع مكان البوت الفعلي من الغرفة (أو None)."""
-        room_users = await self.highrise.get_room_users()
-        for u, pos in room_users.content:
-            if u.id == self.user_id:
-                return pos
-        return None
-
-    async def spawn_bot(self):
-        """ينقل البوت لمكان الظهور ويتأكد أن الانتقال نجح فعلًا، ويعيد المحاولة إذا الغرفة رجعته."""
-        sp = START_POSITION
-        dest = Position(x=sp["x"], y=sp["y"], z=sp["z"])
-        pos = None
-        try:
-            for attempt in range(1, 7):
-                await sleep(2 if attempt == 1 else 3)
-                try:
-                    await self.highrise.teleport(user_id=self.user_id, dest=dest)
-                    await sleep(1.5)
-                    pos = await self.get_bot_position()
-                except Exception as e:
-                    logger.error(f"خطأ في نقل البوت (محاولة {attempt}): {e}")
-                    continue
-                if pos is not None and hasattr(pos, "x"):
-                    logger.info(f"محاولة {attempt}: مكان البوت ({pos.x}, {pos.y}, {pos.z})")
-                    if (abs(pos.x - sp["x"]) <= 0.6 and abs(pos.z - sp["z"]) <= 0.6
-                            and abs(pos.y - sp["y"]) <= 1.0):
-                        await self.highrise.chat("✅ تم نقل البوت إلى الموقع الابتدائي!")
-                        return
-            if SHOW_SPAWN_DEBUG:
-                if pos is not None and hasattr(pos, "x"):
-                    await self.highrise.chat(f"⚠️ ما نجح النقل للمكان المحدد. مكان البوت الفعلي: ({pos.x}, {pos.y}, {pos.z})")
-                else:
-                    await self.highrise.chat("⚠️ ما قدرت أتأكد من مكان البوت.")
-        except CancelledError:
-            raise
-        except Exception as e:
-            logger.error(f"خطأ في النقل الأولي: {e}")
 
     async def on_user_join(self, user: User, position: Position):
         username = user.username.lower()
@@ -2180,6 +2148,7 @@ class AdvancedBot(BaseBot):
             "!thumbs all - thumbs-up للجميع\n"
             "!wallet - عرض رصيد البوت\n"
             "!set - نقل البوت إلى المشرف\n"
+            "!t - نقل البوت إلى 11.0, 7.0, 11.0\n"
             "!setstart - حفظ مكانك كنقطة بداية دائمة للبوت\n"
             "!item set @username - تغيير مظهر البوت إلى عناصر المستخدم\n"
             "!tip <العدد> all - إكرامية للجميع\n"
@@ -2836,6 +2805,19 @@ class AdvancedBot(BaseBot):
         except Exception as e:
             await self.highrise.chat(f"خطأ في نقل البوت: {e}")
             logger.error(f"خطأ في cmd_set: {e}")
+
+    async def cmd_t(self, user: User, parts: list):
+        """!t - ينقل البوت إلى الإحداثيات 11.0 / 7.0 / 11.0"""
+        if user.username.lower() not in self.config["admin_usernames"]:
+            await self.highrise.chat(self.get_message("no_permission"))
+            return
+        try:
+            dest = Position(x=11.0, y=7.0, z=11.0)
+            await self.highrise.teleport(user_id=self.user_id, dest=dest)
+            await self.highrise.chat("تم نقل البوت إلى (11.0, 7.0, 11.0)")
+        except Exception as e:
+            await self.highrise.chat(f"خطأ في نقل البوت: {e}")
+            logger.error(f"خطأ في cmd_t: {e}")
 
     async def cmd_setstart(self, user: User, parts: list):
         """!setstart - يعرض إحداثيات مكانك جاهزة للصقها بـ settings.py كمكان ظهور البوت."""
