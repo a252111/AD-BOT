@@ -1348,8 +1348,8 @@ class AdvancedBot(BaseBot):
                 await self.start_dance(user, self.emotes[msg_lower])
             elif msg_lower in ["stop", "استوپ"]:
                 await self.stop_dance(user)
-            elif msg_lower in ["سازنده", "creature", "creator", "سازندت", "سازنده بات"]:
-                await self.highrise.chat("👑 مطوّر هذا البوت: @ad0ri 👑")
+            elif msg_lower in ["سازنده", "creature", "creator", "مالك", "سازنده بات"]:
+                await self.highrise.chat("👑 مطوّر هذا البوت: @RQTM 👑")
             elif msg_lower.startswith("!"):
                 parts = msg.split()
                 parts_lower = [p.lower() for p in parts]
