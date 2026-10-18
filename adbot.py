@@ -33,10 +33,10 @@ DEFAULT_CONFIG = {
         "vip1": {"x": 14.5, "y": 16.75, "z": 5.5},
         "dj": {"x": 9.5, "y": 10.75, "z": 10.5}
     },
-    "language": "fa",
-    "welcome_message": "✨ 🌟 𝐖𝐞𝐥𝐜𝐨𝐦𝐞 {username} ❤️ 𝐆𝐥𝐚𝐝 𝐭𝐨 𝐡𝐚𝐯𝐞 𝐲𝐨𝐮 𝐡𝐞𝐫𝐞!\n🕺 𝐔𝐬𝐞 𝐍𝐮𝐦𝐛𝐞𝐫𝐬 (𝟏-𝟐𝟓𝟔) 𝐨𝐫 𝐄𝐦𝐨𝐭𝐞 𝐍𝐚𝐦𝐞𝐬 𝐭𝐨 𝐝𝐚𝐧𝐜𝐞!\n👑 𝐓𝐡𝐢𝐬 𝐛𝐨𝐭 𝐰𝐚𝐬 𝐜𝐫𝐞𝐚𝐭𝐞𝐝 & 𝐝𝐞𝐯𝐞𝐥𝐨𝐩𝐞𝐝 𝐛𝐲 @𝐚𝐝𝟎𝐫𝐢 😉\n📺 𝐒𝐮𝐛𝐬𝐜𝐫𝐢𝐛𝐞 𝐭𝐨 𝐨𝐮𝐫 𝐘𝐨𝐮𝐓𝐮𝐛𝐞: @𝐚𝐝𝐨𝐫𝐢_𝐡𝐢𝐭𝐨𝐭𝐬𝐨 🚀",
+    "language": "ar",
+    "welcome_message": "✨ أهلاً وسهلاً {username} ❤️ نورتنا!\n🕺 استخدم الأرقام (1-256) أو أسماء الحركات للرقص!\n👑 تم تطوير البوت بواسطة @ad0ri 😉\n📺 اشتركوا في يوتيوب: @adori_hitotso 🚀",
     "announcement_interval": 300,
-    "announcement_message": "برای اجاره بات به آیدی @ad0ri پیام دهید!"
+    "announcement_message": "لاستئجار البوت، راسلوا @ad0ri!"
 }
 
 class AdvancedBot(BaseBot):
@@ -1116,44 +1116,66 @@ class AdvancedBot(BaseBot):
 
     def get_message(self, key, **kwargs):
         messages = {
+            "ar": {
+                "welcome": self.config["welcome_message"],
+                "invalid_command": "❌ أمر غير معروف! اكتب !help لعرض الأوامر.",
+                "no_permission": "ليس لديك صلاحية لاستخدام هذا الأمر!",
+                "user_not_found": "المستخدم {username} غير متصل.",
+                "invalid_format": "صيغة غير صحيحة: {format}",
+                "teleport_success": "تم نقل @{username} إلى {location}!",
+                "teleport_error": "خطأ في النقل: {error}",
+                "heart_success": "تم إرسال {count} قلب بنفسجي إلى @{username}!",
+                "heart_all_success": "تم إرسال {count} تفاعلاً إلى {count} مستخدمين!",
+                "clap_success": "تم إرسال {count} تصفيق إلى @{username}!",
+                "wink_success": "تم إرسال {count} غمزة إلى @{username}!",
+                "wave_success": "تم إرسال {count} تحية إلى @{username}!",
+                "thumbs_success": "تم إرسال {count} إعجاب إلى @{username}!",
+                "wallet_error": "خطأ في جلب الرصيد: {error}",
+                "tip_success": "تم إرسال {amount} من الذهب إلى @{username}.",
+                "tip_all_success": "تم إرسال {amount} من الذهب إلى {count} مستخدمين!",
+                "ban_success": "تم حظر @{username}!",
+                "unban_success": "تم إلغاء حظر @{username} بنجاح!",
+                "unban_not_banned": "المستخدم @{username} غير موجود في قائمة الحظر.",
+                "dancechain_success": "تم تشغيل سلسلة الرقص للمستخدم @{username}!",
+                "addtele_success": "تم حفظ الموقع {location}!",
+                "deltele_success": "تم حذف الموقع {location} بنجاح!",
+                "deltele_not_found": "الموقع {location} غير موجود!",
+                "deltele_protected": "لا يمكن حذف الموقع الافتراضي {location}!",
+                "set_item_success": "تم تغيير مظهر البوت إلى عناصر @{username}!",
+                "listadd_empty": "قائمة المشرفين فارغة.",
+                "listadd_success": "قائمة المشرفين ({count}):\n{admin_list}",
+                "freeze_success": "تم تجميد المستخدم @{username}!",
+                "unfreeze_success": "تم إلغاء تجميد @{username}!",
+                "unfreeze_not_frozen": "المستخدم @{username} غير مجمّد!",
+                "party_success": "تم تفعيل الرقصة رقم {dance_number} للمستخدم @{username}!",
+                "party_all_success": "تم تفعيل الرقصة رقم {dance_number} لـ {count} مستخدمين!",
+                "partys_success": "تم إيقاف الرقص الإجباري للمستخدم @{username}!",
+                "partys_not_dancing": "المستخدم @{username} ليس في وضع الرقص الإجباري!"
+            },
             "fa": {
                 "welcome": self.config["welcome_message"],
                 "invalid_command": "❌ دستور نامعلوم! برای دیدن دستورات بات !help استفاده کنید یا به @ad0ri پیام بدید.",
                 "no_permission": "فقط ادمین‌ها می‌توانند از این دستور استفاده کنند!",
-                "user_not_found": "کاربر {username} آنلاین نیست.",
-                "invalid_format": "فرمت نادرست: {format}",
-                "teleport_success": "@{username} به {location} تلپورت شد!",
-                "teleport_error": "خطا در تلپورت: {error}",
-                "heart_success": "{count} قلب بنفش به @{username} ارسال شد!",
-                "heart_all_success": "{count} واکنش به {count} نفر ارسال شد!",
-                "clap_success": "{count} clap به @{username} ارسال شد!",
-                "wink_success": "{count} wink به @{username} ارسال شد!",
-                "wave_success": "{count} wave به @{username} ارسال شد!",
-                "thumbs_success": "{count} thumbs-up به @{username} ارسال شد!",
-                "wallet_error": "خطا در دریافت موجودی: {error}",
-                "tip_success": "{amount} گلد به @{username} ارسال شد.",
-                "tip_all_success": "تیپ {amount} گلد به {count} نفر ارسال شد!",
-                "ban_success": "@{username} بن شد!",
-                "unban_success": "کاربر @{username} با موفقیت آنبن شد!",
-                "unban_not_banned": "کاربر @{username} در لیست بن نیست.",
-                "dancechain_success": "زنجیره رقص برای @{username} اجرا شد!",
-                "addtele_success": "مکان {location} ذخیره شد!",
-                "deltele_success": "مکان {location} با موفقیت حذف شد!",
-                "deltele_not_found": "مکان {location} وجود ندارد!",
-                "deltele_protected": "نمی‌توانید مکان پیش‌فرض {location} را حذف کنید!",
-                "set_item_success": "ظاهر ربات به ایتم‌های @{username} تغییر کرد!",
-                "listadd_empty": "هیچ ادمینی در لیست وجود ندارد.",
-                "listadd_success": "لیست ادمین‌ها ({count} نفر):\n{admin_list}",
-                "freeze_success": "کاربر @{username} فریز شد!",
-                "unfreeze_success": "کاربر @{username} از حالت فریز آزاد شد!",
-                "unfreeze_not_frozen": "کاربر @{username} فریز نشده است!",
-                "party_success": "رقص شماره {dance_number} برای @{username} فعال شد!",
-                "party_all_success": "رقص شماره {dance_number} برای {count} کاربر فعال شد!",
-                "partys_success": "رقص اجباری برای @{username} متوقف شد!",
+                "user_not_found": "کاربر {username} آنلاین نیست.", "invalid_format": "فرمت نادرست: {format}",
+                "teleport_success": "@{username} به {location} تلپورت شد!", "teleport_error": "خطا در تلپورت: {error}",
+                "heart_success": "{count} قلب بنفش به @{username} ارسال شد!", "heart_all_success": "{count} واکنش به {count} نفر ارسال شد!",
+                "clap_success": "{count} clap به @{username} ارسال شد!", "wink_success": "{count} wink به @{username} ارسال شد!",
+                "wave_success": "{count} wave به @{username} ارسال شد!", "thumbs_success": "{count} thumbs-up به @{username} ارسال شد!",
+                "wallet_error": "خطا در دریافت موجودی: {error}", "tip_success": "{amount} گلد به @{username} ارسال شد.",
+                "tip_all_success": "تیپ {amount} گلد به {count} نفر ارسال شد!", "ban_success": "@{username} بن شد!",
+                "unban_success": "کاربر @{username} با موفقیت آنبن شد!", "unban_not_banned": "کاربر @{username} در لیست بن نیست.",
+                "dancechain_success": "زنجیره رقص برای @{username} اجرا شد!", "addtele_success": "مکان {location} ذخیره شد!",
+                "deltele_success": "مکان {location} با موفقیت حذف شد!", "deltele_not_found": "مکان {location} وجود ندارد!",
+                "deltele_protected": "نمی‌توانید مکان پیش‌فرض {location} را حذف کنید!", "set_item_success": "ظاهر ربات به ایتم‌های @{username} تغییر کرد!",
+                "listadd_empty": "هیچ ادمینی در لیست وجود ندارد.", "listadd_success": "لیست ادمین‌ها ({count} نفر):\n{admin_list}",
+                "freeze_success": "کاربر @{username} فریز شد!", "unfreeze_success": "کاربر @{username} از حالت فریز آزاد شد!",
+                "unfreeze_not_frozen": "کاربر @{username} فریز نشده است!", "party_success": "رقص شماره {dance_number} برای @{username} فعال شد!",
+                "party_all_success": "رقص شماره {dance_number} برای {count} کاربر فعال شد!", "partys_success": "رقص اجباری برای @{username} متوقف شد!",
                 "partys_not_dancing": "کاربر @{username} در حال رقص اجباری نیست!"
             }
         }
-        return messages[self.config["language"]][key].format(**kwargs)
+        lang = self.config.get("language", "ar")
+        return messages.get(lang, messages["ar"])[key].format(**kwargs)
 
     async def cleanup_tasks(self):
         try:
@@ -1200,17 +1222,17 @@ class AdvancedBot(BaseBot):
         self.user_id = getattr(session_metadata, "user_id", None)
         if not self.user_id:
             logger.error("شناسه ربات در session_metadata پیدا نشد.")
-            await self.highrise.chat("خطا: شناسه ربات پیدا نشد.")
+            await self.highrise.chat("❌ تعذر العثور على معرّف البوت.")
             return
 
         try:
             dest = Position(x=16.5, y=0.25, z=3.5)
             await self.highrise.teleport(user_id=self.user_id, dest=dest)
-            await self.highrise.chat("ربات به موقعیت اولیه (x=0.5, y=1.0, z=1.5) منتقل شد!")
+            await self.highrise.chat("تم نقل البوت إلى الموقع الابتدائي!")
             logger.info("ربات به موقعیت اولیه تلپورت شد.")
         except Exception as e:
-            logger.error(f"خطا در تلپورت اولیه: {e}")
-            await self.highrise.chat(f"خطا در تلپورت اولیه: {e}")
+            logger.error(f"خطأ في النقل الأولي: {e}")
+            await self.highrise.chat(f"خطأ في النقل الأولي: {e}")
 
         await self.sync_room_users()
         self.announcement_task = create_task(self.announcement_loop())
@@ -1243,8 +1265,8 @@ class AdvancedBot(BaseBot):
         if username in self.frozen_users:
             self.frozen_users[username].cancel()
             self.frozen_users.pop(username, None)
-        await self.highrise.chat(f"@{user.username} از روم خارج شد.")
-        logger.info(f"کاربر {user.username} (ID: {user.id}) از روم خارج شد. موقعیت: {position}")
+        await self.highrise.chat(f"@{user.username} غادر الغرفة.")
+        logger.info(f"کاربر {user.username} (ID: {user.id}) غادر الغرفة. موقعیت: {position}")
 
     async def sync_room_users(self):
         try:
@@ -1268,10 +1290,10 @@ class AdvancedBot(BaseBot):
                 self.user_positions[username] = user_data[1]
             
             logger.info(f"همگام‌سازی کاربران انجام شد. تعداد کاربران: {len(self.active_users)}. کاربران: {[user.username for user in self.active_users.values()]}")
-            await self.highrise.chat(f"{len(self.active_users)} کاربر در روم شناسایی شدند.")
+            await self.highrise.chat(f"{len(self.active_users)} مستخدمين في الغرفة.")
         except Exception as e:
             logger.error(f"خطا در همگام‌سازی کاربران: {e}", exc_info=True)
-            await self.highrise.chat("خطا در شناسایی کاربران روم.")
+            await self.highrise.chat("تعذر التعرف على مستخدمي الغرفة.")
 
     async def announcement_loop(self):
         try:
@@ -1327,7 +1349,7 @@ class AdvancedBot(BaseBot):
             elif msg_lower in ["stop", "استوپ"]:
                 await self.stop_dance(user)
             elif msg_lower in ["سازنده", "creature", "creator", "سازندت", "سازنده بات"]:
-                await self.highrise.chat("👑 سازنده این بات: @ad0ri 👑")
+                await self.highrise.chat("👑 مطوّر هذا البوت: @ad0ri 👑")
             elif msg_lower.startswith("!"):
                 parts = msg.split()
                 parts_lower = [p.lower() for p in parts]
@@ -1446,7 +1468,7 @@ class AdvancedBot(BaseBot):
             emote_id = None
 
         if not emote_id:
-            await self.highrise.chat("❌ لینک نامعتبر است! باید شامل id=... باشد.")
+            await self.highrise.chat("❌ الرابط غير صالح! يجب أن يحتوي على id=...")
             logger.info(f"لینک نامعتبر برای !emote توسط {user.username}: {link}")
             return
 
@@ -1530,7 +1552,7 @@ class AdvancedBot(BaseBot):
             count = int(parts[1])
             spam_message = " ".join(parts[2:]) if len(parts) > 2 else "اسپم آزمایشی!"
             if count < 1 or count > 100:
-                await self.highrise.chat("تعداد پیام‌ها باید بین 1 تا 100 باشد.")
+                await self.highrise.chat("يجب أن يكون عدد الرسائل بين 1 و100.")
                 logger.info(f"تعداد پیام‌های نامعتبر ({count}) توسط {user.username} وارد شد.")
                 return
 
@@ -1587,7 +1609,7 @@ class AdvancedBot(BaseBot):
                     await self.highrise.chat(f"@{user.username} به مکان @{target_user.username} تلپورت شد.")
                     logger.info(f"کاربر {user.username} به مکان {target_username} تلپورت شد.")
                 else:
-                    await self.highrise.chat("موقعیت کاربر در دسترس نیست.")
+                    await self.highrise.chat("موقع المستخدم غير متاح.")
                     logger.info(f"موقعیت {target_username} برای تلپورت {user.username} در دسترس نیست.")
             except Exception as e:
                 await self.highrise.chat(self.get_message("teleport_error", error=str(e)))
@@ -1607,7 +1629,7 @@ class AdvancedBot(BaseBot):
                     await self.highrise.chat(f"@{target_user.username} به مکان @{user.username} تلپورت شد.")
                     logger.info(f"کاربر {target_username} به مکان {user.username} تلپورت شد.")
                 else:
-                    await self.highrise.chat("موقعیت شما در دسترس نیست.")
+                    await self.highrise.chat("موقعك غير متاح.")
                     logger.info(f"موقعیت {user.username} برای تلپورت {target_username} در دسترس نیست.")
             except Exception as e:
                 await self.highrise.chat(self.get_message("teleport_error", error=str(e)))
@@ -1616,7 +1638,7 @@ class AdvancedBot(BaseBot):
         elif len(parts) == 3 and parts[1] == "me" and parts[2] == "all":
             admin_position = self.user_positions.get(user.username.lower())
             if not admin_position:
-                await self.highrise.chat("موقعیت شما در دسترس نیست.")
+                await self.highrise.chat("موقعك غير متاح.")
                 logger.info(f"موقعیت {user.username} برای تلپورت همه کاربران در دسترس نیست.")
                 return
             try:
@@ -1654,7 +1676,7 @@ class AdvancedBot(BaseBot):
                 active_users = list(self.active_users.items())
                 active_users_count = len([u for u in active_users if u[1].id != self.user_id])
                 if active_users_count == 0:
-                    await self.highrise.chat("هیچ کاربری در روم آنلاین نیست!")
+                    await self.highrise.chat("لا يوجد مستخدمون متصلون في الغرفة!")
                     return
                 reaction_id = "heart"
                 successful_hearts = 0
@@ -1675,7 +1697,7 @@ class AdvancedBot(BaseBot):
                     await self.highrise.chat(self.get_message("heart_all_success", count=successful_hearts))
                     logger.info(f"قلب بنفش به {successful_hearts} نفر ارسال شد.")
                 else:
-                    await self.highrise.chat("هیچ قلبی با موفقیت ارسال نشد.")
+                    await self.highrise.chat("لم يتم إرسال أي قلب بنجاح.")
             except Exception as e:
                 await self.highrise.chat(f"خطا در اجرای دستور: {e}")
                 logger.error(f"خطا در ارسال قلب به همه: {e}")
@@ -1727,7 +1749,7 @@ class AdvancedBot(BaseBot):
                 active_users = list(self.active_users.items())
                 active_users_count = len([u for u in active_users if u[1].id != self.user_id])
                 if active_users_count == 0:
-                    await self.highrise.chat("هیچ کاربری در روم آنلاین نیست!")
+                    await self.highrise.chat("لا يوجد مستخدمون متصلون في الغرفة!")
                     return
                 reaction_id = "clap"
                 successful_reactions = 0
@@ -1748,7 +1770,7 @@ class AdvancedBot(BaseBot):
                     await self.highrise.chat(self.get_message("heart_all_success", count=successful_reactions))
                     logger.info(f"Clap به {successful_reactions} نفر ارسال شد.")
                 else:
-                    await self.highrise.chat("هیچ clap با موفقیت ارسال نشد.")
+                    await self.highrise.chat("لم يتم إرسال أي تصفيق بنجاح.")
             except Exception as e:
                 await self.highrise.chat(f"خطا در اجرای دستور: {e}")
                 logger.error(f"خطا در ارسال clap به همه: {e}")
@@ -1800,7 +1822,7 @@ class AdvancedBot(BaseBot):
                 active_users = list(self.active_users.items())
                 active_users_count = len([u for u in active_users if u[1].id != self.user_id])
                 if active_users_count == 0:
-                    await self.highrise.chat("هیچ کاربری در روم آنلاین نیست!")
+                    await self.highrise.chat("لا يوجد مستخدمون متصلون في الغرفة!")
                     return
                 reaction_id = "wink"
                 successful_reactions = 0
@@ -1821,7 +1843,7 @@ class AdvancedBot(BaseBot):
                     await self.highrise.chat(self.get_message("heart_all_success", count=successful_reactions))
                     logger.info(f"Wink به {successful_reactions} نفر ارسال شد.")
                 else:
-                    await self.highrise.chat("هیچ wink با موفقیت ارسال نشد.")
+                    await self.highrise.chat("لم يتم إرسال أي غمزة بنجاح.")
             except Exception as e:
                 await self.highrise.chat(f"خطا در اجرای دستور: {e}")
                 logger.error(f"خطا در ارسال wink به همه: {e}")
@@ -1873,7 +1895,7 @@ class AdvancedBot(BaseBot):
                 active_users = list(self.active_users.items())
                 active_users_count = len([u for u in active_users if u[1].id != self.user_id])
                 if active_users_count == 0:
-                    await self.highrise.chat("هیچ کاربری در روم آنلاین نیست!")
+                    await self.highrise.chat("لا يوجد مستخدمون متصلون في الغرفة!")
                     return
                 reaction_id = "wave"
                 successful_reactions = 0
@@ -1894,7 +1916,7 @@ class AdvancedBot(BaseBot):
                     await self.highrise.chat(self.get_message("heart_all_success", count=successful_reactions))
                     logger.info(f"Wave به {successful_reactions} نفر ارسال شد.")
                 else:
-                    await self.highrise.chat("هیچ wave با موفقیت ارسال نشد.")
+                    await self.highrise.chat("لم يتم إرسال أي تحية بنجاح.")
             except Exception as e:
                 await self.highrise.chat(f"خطا در اجرای دستور: {e}")
                 logger.error(f"خطا در ارسال wave به همه: {e}")
@@ -1946,7 +1968,7 @@ class AdvancedBot(BaseBot):
                 active_users = list(self.active_users.items())
                 active_users_count = len([u for u in active_users if u[1].id != self.user_id])
                 if active_users_count == 0:
-                    await self.highrise.chat("هیچ کاربری در روم آنلاین نیست!")
+                    await self.highrise.chat("لا يوجد مستخدمون متصلون في الغرفة!")
                     return
                 reaction_id = "thumbs-up"
                 successful_reactions = 0
@@ -1967,7 +1989,7 @@ class AdvancedBot(BaseBot):
                     await self.highrise.chat(self.get_message("heart_all_success", count=successful_reactions))
                     logger.info(f"Thumbs-up به {successful_reactions} نفر ارسال شد.")
                 else:
-                    await self.highrise.chat("هیچ thumbs-up با موفقیت ارسال نشد.")
+                    await self.highrise.chat("لم يتم إرسال أي إعجاب بنجاح.")
             except Exception as e:
                 await self.highrise.chat(f"خطا در اجرای دستور: {e}")
                 logger.error(f"خطا در ارسال thumbs-up به همه: {e}")
@@ -2023,7 +2045,7 @@ class AdvancedBot(BaseBot):
                         break
             else:
                 logger.error("ساختار wallet ناشناخته است.")
-                await self.highrise.chat("خطا: ساختار پاسخ wallet ناشناخته است.")
+                await self.highrise.chat("خطأ: تنسيق استجابة المحفظة غير معروف.")
                 return
             
             await self.highrise.chat(f"موجودی گلد ربات: {gold_amount} گلد")
@@ -2045,7 +2067,7 @@ class AdvancedBot(BaseBot):
         try:
             tip_amount = int(parts[1])
             if tip_amount not in [1, 5, 10, 50, 100]:
-                await self.highrise.chat("مقدار گلد باید 1، 5، 10، 50 یا 100 باشد.")
+                await self.highrise.chat("يجب أن تكون كمية الذهب 1 أو 5 أو 10 أو 50 أو 100.")
                 return
 
             gold_bar_map = {
@@ -2069,7 +2091,7 @@ class AdvancedBot(BaseBot):
                         break
             else:
                 logger.error("ساختار wallet ناشناخته است.")
-                await self.highrise.chat("خطا: ساختار پاسخ wallet ناشناخته است.")
+                await self.highrise.chat("خطأ: تنسيق استجابة المحفظة غير معروف.")
                 return
 
             active_users = [u for u in self.active_users.values() if u.id != self.user_id]
@@ -2344,7 +2366,7 @@ class AdvancedBot(BaseBot):
 
     async def cmd_addadmin(self, user: User, parts: list):
         if not self.is_host(user.username):
-            await self.highrise.chat("فقط Host می‌تواند از این دستور استفاده کند!")
+            await self.highrise.chat("هذا الأمر متاح للـ Host فقط!")
             logger.info(f"کاربر {user.username} سعی کرد !addadmin را اجرا کند اما دسترسی ندارد.")
             return
 
@@ -2371,7 +2393,7 @@ class AdvancedBot(BaseBot):
 
     async def cmd_removeadmin(self, user: User, parts: list):
         if not self.is_host(user.username):
-            await self.highrise.chat("فقط Host می‌تواند از این دستور استفاده کند!")
+            await self.highrise.chat("هذا الأمر متاح للـ Host فقط!")
             logger.info(f"کاربر {user.username} سعی کرد !removeadmin را اجرا کند اما دسترسی ندارد.")
             return
 
@@ -2410,7 +2432,7 @@ class AdvancedBot(BaseBot):
         """⚠️ اختصاصی: فقط خود مالک اصلی بات (ad0ri) می‌تواند رتبه Host بدهد؛
         حتی سایر Host‌ها هم اجازه اجرای این دستور را ندارند."""
         if user.username.lower() != "ad0ri":
-            await self.highrise.chat("❌ دسترسی غیرمجاز!")
+            await self.highrise.chat("❌ وصول غير مصرح به!")
             logger.info(f"کاربر {user.username} سعی کرد !addhost را اجرا کند اما دسترسی ندارد.")
             return
 
@@ -2439,7 +2461,7 @@ class AdvancedBot(BaseBot):
     async def cmd_removehost(self, user: User, parts: list):
         """⚠️ اختصاصی: فقط خود مالک اصلی بات (ad0ri) می‌تواند رتبه Host را بگیرد."""
         if user.username.lower() != "ad0ri":
-            await self.highrise.chat("❌ دسترسی غیرمجاز!")
+            await self.highrise.chat("❌ وصول غير مصرح به!")
             logger.info(f"کاربر {user.username} سعی کرد !removehost را اجرا کند اما دسترسی ندارد.")
             return
 
@@ -2681,11 +2703,11 @@ class AdvancedBot(BaseBot):
     async def cmd_loopchat(self, user: User, parts: list):
         admins_lower = [admin.lower() for admin in self.config.get("admin_usernames", [])]
         if user.username.lower() not in admins_lower:
-            await self.highrise.chat("❌ این دستور مخصوص ادمین‌های ربات است!")
+            await self.highrise.chat("❌ هذا الأمر مخصص لمشرفي البوت!")
             return
 
         if len(parts) < 2:
-            await self.highrise.chat("⚠️ فرمت اشتباه! فرمت صحیح: !loopchat پیام شما")
+            await self.highrise.chat("⚠️ صيغة غير صحيحة! الاستخدام: !loopchat رسالتك")
             return
 
         # تمام متن بعد از !loopchat رو بگیر
@@ -2714,7 +2736,7 @@ class AdvancedBot(BaseBot):
     async def cmd_emotebot(self, user: User, parts: list):
         admins_lower = [admin.lower() for admin in self.config.get("admin_usernames", [])]
         if user.username.lower() not in admins_lower:
-            await self.highrise.chat("❌ این دستور مخصوص ادمین‌های ربات است!")
+            await self.highrise.chat("❌ هذا الأمر مخصص لمشرفي البوت!")
             return
 
         if len(parts) < 2:
@@ -2730,7 +2752,7 @@ class AdvancedBot(BaseBot):
             actual_emote_name = input_emote
 
         if not actual_emote_name:
-            await self.highrise.chat("❌ دنس یا شماره وارد شده در لیست دنس‌های ربات پیدا نشد!")
+            await self.highrise.chat("❌ لم يتم العثور على الرقصة أو الرقم في قائمة رقصات البوت!")
             return
 
         # متوقف کردن لایو دنس قبلی ربات در صورت وجود
