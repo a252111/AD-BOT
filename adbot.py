@@ -44,6 +44,14 @@ DEFAULT_CONFIG = {
 QUIZ_TIMEOUT = 30  # عدد الثواني لكل سؤال
 QUIZ_SCORES_FILE = "quiz_scores.json"
 
+# 🎭 حركات البوت أثناء المسابقة
+QUIZ_COLOR_QUESTION = "<#00FF00>"  # أخضر للأسئلة
+QUIZ_COLOR_ANSWER = "<#FF0000>"    # أحمر للأجوبة
+
+QUIZ_EMOTE_THINK = "emote-think"   # تفكير: أثناء ما ينتظر الجواب
+QUIZ_EMOTE_HAPPY = "emote-hyped"   # حماس: إذا أحد جاوب صح
+QUIZ_EMOTE_SAD = "emote-sad"       # حزن: إذا خلص الوقت وماكو جواب
+
 QUIZ_INTROS = [
     "🎉 يلا شباب! تبدي مسابقة المعلومات - {rounds} أسئلة، شوفوا شغلكم! 🧠",
     "🔥 هلا والله! نبدي المسابقة، {rounds} أسئلة، اللي يجاوب أول واحد يربح نقطة 💪",
@@ -128,6 +136,8 @@ class AdvancedBot(BaseBot):
         self.quiz_task = None
         self.quiz_current = None
         self.quiz_session = {}
+        self.quiz_think_task = None
+        self.bot_emote_name = None
         self.quiz_scores = {}
         self.load_quiz_scores()
         self.commands = {
@@ -1269,6 +1279,9 @@ class AdvancedBot(BaseBot):
                 self.quiz_task.cancel()
             self.quiz_task = None
             self.quiz_current = None
+            if self.quiz_think_task and not self.quiz_think_task.done():
+                self.quiz_think_task.cancel()
+            self.quiz_think_task = None
             
             for username, task in self.frozen_users.items():
                 if not task.done():
@@ -1611,8 +1624,58 @@ class AdvancedBot(BaseBot):
         except Exception as e:
             logger.error(f"خطأ في حفظ نقاط المسابقة: {e}")
 
+    async def bot_play_emote(self, emote: str):
+        """تشغيل حركة مرة وحدة على البوت نفسه."""
+        try:
+            await self.highrise.send_emote(emote, self.user_id)
+        except Exception as e:
+            logger.error(f"خطأ في تشغيل حركة البوت {emote}: {e}")
+
+    async def quiz_think_loop(self):
+        """يكرر حركة التفكير طول ما السؤال مفتوح."""
+        try:
+            while True:
+                await self.bot_play_emote(QUIZ_EMOTE_THINK)
+                await sleep(self.emote_durations.get(QUIZ_EMOTE_THINK, 4.0) + 0.5)
+        except CancelledError:
+            pass
+
+    async def stop_quiz_think(self):
+        if self.quiz_think_task and not self.quiz_think_task.done():
+            self.quiz_think_task.cancel()
+            try:
+                await self.quiz_think_task
+            except CancelledError:
+                pass
+        self.quiz_think_task = None
+
+    def start_bot_emote_loop(self, emote_name: str):
+        """حلقة رقص البوت المستمرة (!emotebot)."""
+        if self.user_id in self.dance_tasks:
+            self.dance_tasks[self.user_id].cancel()
+            self.dance_tasks.pop(self.user_id, None)
+        self.bot_emote_name = emote_name
+        sleep_time = self.emote_durations.get(emote_name, 15.0) + 1.0
+
+        async def new_emote_loop():
+            try:
+                while True:
+                    await self.highrise.send_emote(emote_name, self.user_id)
+                    await sleep(sleep_time)
+            except CancelledError:
+                logger.info("تم إلغاء رقصة البوت المستمرة.")
+            except Exception as e:
+                logger.error(f"خطأ في رقصة البوت المستمرة: {e}")
+
+        self.dance_tasks[self.user_id] = create_task(new_emote_loop())
+
     async def run_quiz(self, rounds: int):
         self.quiz_session = {}
+        # إيقاف رقصة البوت المستمرة مؤقتًا حتى ما تتعارض مع حركات المسابقة
+        resume_emote = self.bot_emote_name
+        if self.user_id in self.dance_tasks:
+            self.dance_tasks[self.user_id].cancel()
+            self.dance_tasks.pop(self.user_id, None)
         try:
             await self.highrise.chat(random.choice(QUIZ_INTROS).format(rounds=rounds))
             await sleep(4)
@@ -1624,16 +1687,23 @@ class AdvancedBot(BaseBot):
                     "event": event,
                     "winner": None,
                 }
-                await self.highrise.chat(f"🧠 السؤال {number}/{rounds}: {question}\n⏳ عدكم {QUIZ_TIMEOUT} ثانية!")
+                await self.highrise.chat(f"{QUIZ_COLOR_QUESTION}🧠 السؤال {number}/{rounds}: {question}\n⏳ عدكم {QUIZ_TIMEOUT} ثانية!")
+                # 🤔 البوت يفكر طول ما ينتظر الجواب
+                self.quiz_think_task = create_task(self.quiz_think_loop())
                 try:
                     await asyncio.wait_for(event.wait(), timeout=QUIZ_TIMEOUT)
                     winner = self.quiz_current["winner"]
                     points = self.quiz_scores.get(winner.lower(), {}).get("points", 1)
-                    await self.highrise.chat(random.choice(QUIZ_CORRECT).format(user=winner, points=points))
+                    await self.stop_quiz_think()
+                    await self.bot_play_emote(QUIZ_EMOTE_HAPPY)  # 🤩 حماس
+                    await self.highrise.chat(QUIZ_COLOR_ANSWER + random.choice(QUIZ_CORRECT).format(user=winner, points=points))
                 except asyncio.TimeoutError:
-                    await self.highrise.chat(random.choice(QUIZ_TIMEOUT_MSG).format(answer=answers[0]))
+                    await self.stop_quiz_think()
+                    await self.bot_play_emote(QUIZ_EMOTE_SAD)  # 😢 حزن
+                    await self.highrise.chat(QUIZ_COLOR_ANSWER + random.choice(QUIZ_TIMEOUT_MSG).format(answer=answers[0]))
                 finally:
                     self.quiz_current = None
+                    await self.stop_quiz_think()
                 await sleep(4)
 
             if self.quiz_session:
@@ -1657,6 +1727,10 @@ class AdvancedBot(BaseBot):
             logger.error(f"خطأ في المسابقة: {e}")
         finally:
             self.quiz_current = None
+            await self.stop_quiz_think()
+            # إرجاع رقصة البوت المستمرة إذا كانت شغالة قبل المسابقة
+            if resume_emote:
+                self.start_bot_emote_loop(resume_emote)
 
     async def cmd_quiz(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
@@ -1683,6 +1757,7 @@ class AdvancedBot(BaseBot):
         if self.quiz_task and not self.quiz_task.done():
             self.quiz_task.cancel()
             self.quiz_current = None
+            await self.stop_quiz_think()
             await self.highrise.chat("🛑 انوقفت المسابقة. نشوفكم بجولة ثانية! 👋")
         else:
             await self.highrise.chat("ماكو مسابقة شغالة هسه.")
@@ -2972,32 +3047,9 @@ class AdvancedBot(BaseBot):
             await self.highrise.chat("❌ لم يتم العثور على الرقصة أو الرقم في قائمة رقصات البوت!")
             return
 
-        # إيقاف رقصة البوت السابقة الجارية إن وجدت
-        if self.user_id in self.dance_tasks:
-            self.dance_tasks[self.user_id].cancel()
-            self.dance_tasks.pop(self.user_id, None)
-
         await self.highrise.chat(f"✅ تم ضبط رقصة البوت على التكرار الدائم (Loop): [{input_emote}]")
         logger.info(f"تم تغيير رقصة البوت المستمرة إلى {actual_emote_name} بواسطة {user.username}.")
-
-        # جلب المدة الفعلية للرقصة من قاعدة بيانات البوت
-        duration = self.emote_durations.get(actual_emote_name, 15.0)
-        
-        # ⚡ ضمان تنفيذ الرقصة كاملة: بدلاً من النقص، نضيف ثانية واحدة إلى المدة
-        sleep_time = duration + 1.0
-
-        # بدء حلقة الرقص بدون توقف وبسلاسة
-        async def new_emote_loop():
-            try:
-                while True:
-                    await self.highrise.send_emote(actual_emote_name, self.user_id)
-                    await sleep(sleep_time)
-            except CancelledError:
-                logger.info("تم إلغاء رقصة البوت المستمرة.")
-            except Exception as e:
-                logger.error(f"خطأ في رقصة البوت المستمرة: {e}")
-
-        self.dance_tasks[self.user_id] = create_task(new_emote_loop())
+        self.start_bot_emote_loop(actual_emote_name)
 
 async def handle_ping(request):
     return aiohttp.web.Response(text="Bot is Alive!")
