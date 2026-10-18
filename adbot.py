@@ -34,89 +34,31 @@ DEFAULT_CONFIG = {
         "vip1": {"x": 14.5, "y": 16.75, "z": 5.5},
         "dj": {"x": 9.5, "y": 10.75, "z": 10.5}
     },
+    "start_position": dict(START_POSITION),
     "language": "ar",
     "welcome_message": "✨ أهلاً وسهلاً {username} ❤️ نورتنا!\n🕺 استخدم الأرقام (1-256) أو أسماء الحركات للرقص!\n👑 تم تطوير البوت بواسطة @RQTM 😉\n 🚀",
     "announcement_interval": 300,
     "announcement_message": "لاستئجار البوت، راسلوا @RQTM!"
 }
 
-# ============================ مسابقة المعلومات (باللهجة العراقية) ============================
-QUIZ_TIMEOUT = 30  # عدد الثواني لكل سؤال
-QUIZ_SCORES_FILE = "quiz_scores.json"
-
-# 🎭 حركات البوت أثناء المسابقة
-QUIZ_COLOR_QUESTION = "<#00FF00>"  # أخضر للأسئلة
-QUIZ_COLOR_ANSWER = "<#FF0000>"    # أحمر للأجوبة
-
-QUIZ_EMOTE_THINK = "emote-think"   # تفكير: أثناء ما ينتظر الجواب
-QUIZ_EMOTE_HAPPY = "emote-hyped"   # حماس: إذا أحد جاوب صح
-QUIZ_EMOTE_SAD = "emote-sad"       # حزن: إذا خلص الوقت وماكو جواب
-
-QUIZ_INTROS = [
-    "🎉 يلا شباب! تبدي مسابقة المعلومات - {rounds} أسئلة، شوفوا شغلكم! 🧠",
-    "🔥 هلا والله! نبدي المسابقة، {rounds} أسئلة، اللي يجاوب أول واحد يربح نقطة 💪",
-    "🧠 ركزوا يا أبطال! المسابقة بدت، عدنا {rounds} أسئلة وما ننطي مجال! 😎",
-]
-
-QUIZ_CORRECT = [
-    "🎉 عفية عليك @{user}! جواب صح، ربحت نقطة 👏 (مجموعك: {points})",
-    "👏 عاشت إيدك @{user}! هذا الجواب الصحيح، نقطة إلك 🔥 (مجموعك: {points})",
-    "😍 يا بطل @{user}! طلعت ذكي، نقطة إلك ✨ (مجموعك: {points})",
-    "💪 دوم الشاطر @{user}! جاوب صح وأخذ النقطة (مجموعك: {points})",
-]
-
-QUIZ_TIMEOUT_MSG = [
-    "⌛ خلص الوقت وماكو أحد جاوب! الجواب هو: {answer} 😅",
-    "😂 شنو هاي؟ ولا واحد عرف! الجواب: {answer}",
-    "⏰ انتهى الوقت يا جماعة، الجواب كان: {answer} 🙈",
-]
-
-# (السؤال، [الإجابات المقبولة]) - الإجابات لازم تكون كلمات (مو أرقام) حتى ما تتعارض مع أرقام الرقصات
-QUIZ_QUESTIONS = [
-    ("شنو عاصمة العراق؟", ["بغداد"]),
-    ("شنو اسم النهر اللي يمر ببغداد؟", ["دجلة", "نهر دجلة"]),
-    ("أي مدينة عراقية بيها الملوية المشهورة؟", ["سامراء"]),
-    ("شنو المدينة اللي بيها مرقد الإمام الحسين (ع)؟", ["كربلاء"]),
-    ("شنو المدينة اللي ينقال إلها ثغر العراق الباسم؟", ["البصرة"]),
-    ("شنو المحافظة العراقية اللي مركزها الموصل؟", ["نينوى"]),
-    ("شنو اسم أكبر بحيرة بالعراق؟", ["الثرثار", "بحيرة الثرثار"]),
-    ("شنو العملة الرسمية للعراق؟", ["دينار", "الدينار", "الدينار العراقي", "دينار عراقي"]),
-    ("شنو اسم السمك المشوي المشهور ببغداد؟", ["مسكوف", "المسكوف", "سمك مسكوف"]),
-    ("شنو اسم الأكلة العراقية اللي تنلف بورق العنب؟", ["دولمة", "الدولمة"]),
-    ("شنو اسم الكأس الصغير اللي نشرب بيه الشاي بالعراق؟", ["استكان", "الاستكان"]),
-    ("منو الملك البابلي المشهور بشريعته وقانونه؟", ["حمورابي"]),
-    ("منو الحضارة اللي بنت الزقورة بمدينة أور؟", ["السومريين", "السومريون", "سومر", "سومري", "السومرية"]),
-    ("منو المطرب اللي يلقبونه قيصر الأغنية العربية؟", ["كاظم الساهر", "كاظم"]),
-    ("منو قائد منتخب العراق اللي رفع كأس آسيا 2007؟", ["يونس محمود", "يونس"]),
-    ("شنو اسم الجبل اللي رست عليه سفينة نوح حسب القرآن؟", ["الجودي", "جبل الجودي"]),
-    ("شنو عاصمة مصر؟", ["القاهرة"]),
-    ("شنو عاصمة السعودية؟", ["الرياض"]),
-    ("شنو عاصمة الأردن؟", ["عمان"]),
-    ("شنو عاصمة لبنان؟", ["بيروت"]),
-    ("شنو عاصمة المغرب؟", ["الرباط"]),
-    ("شنو عاصمة تركيا؟", ["أنقرة"]),
-    ("شنو عاصمة فرنسا؟", ["باريس"]),
-    ("شنو عاصمة اليابان؟", ["طوكيو"]),
-    ("شنو أكبر قارة بالعالم؟", ["آسيا"]),
-    ("شنو أكبر محيط بالعالم؟", ["الهادي", "المحيط الهادي", "الهادئ", "المحيط الهادئ"]),
-    ("شنو أكبر كوكب بالمجموعة الشمسية؟", ["المشتري", "كوكب المشتري"]),
-    ("شنو أصغر كوكب بالمجموعة الشمسية؟", ["عطارد", "كوكب عطارد"]),
-    ("شنو أكبر صحراء حارة بالعالم؟", ["الصحراء الكبرى", "الكبرى"]),
-    ("شنو أطول برج بالعالم؟", ["برج خليفة", "خليفة"]),
-    ("شنو الغاز اللي نتنفسه حتى نعيش؟", ["الأوكسجين", "الاكسجين", "أكسجين", "اوكسجين"]),
-    ("شنو الحيوان اللي يسمونه سفينة الصحراء؟", ["الجمل", "جمل"]),
-    ("شنو الحيوان اللي يسمونه ملك الغابة؟", ["الأسد", "أسد"]),
-    ("شنو أسرع حيوان بري بالعالم؟", ["الفهد", "فهد", "الشيتا", "شيتا"]),
-    ("شنو أكبر حيوان بالعالم؟", ["الحوت الأزرق", "الحوت", "حوت أزرق", "حوت"]),
-    ("شنو الحيوان اللي يسوي العسل؟", ["النحلة", "النحل", "نحلة", "نحل"]),
-    ("شنو اللون اللي يطلع من خلط الأحمر والأزرق؟", ["بنفسجي", "ارجواني", "أرجواني"]),
-    ("منو أول إنسان على الأرض حسب الأديان؟", ["آدم", "سيدنا آدم"]),
-    ("شنو الشهر اللي يصومون بيه المسلمين؟", ["رمضان", "شهر رمضان"]),
-    ("منو كاتب مسرحية روميو وجولييت؟", ["شكسبير", "وليم شكسبير", "ويليام شكسبير"]),
-    ("لغز: شنو اللي إله عين وما يشوف؟", ["الإبرة", "إبرة"]),
-    ("لغز: شنو اللي كل ما نقصنا منه يكبر؟", ["الحفرة", "حفرة"]),
-    ("لغز: شنو اللي يمشي بلا رجلين ويبجي بلا عيون؟", ["الغيمة", "غيمة", "السحابة", "سحابة", "الغيم"]),
-]
+# الإعدادات كلها موجودة في ملف settings.py
+from settings import (
+    QUIZ_TIMEOUT,
+    QUIZ_SCORES_FILE,
+    QUIZ_COLOR_QUESTION,
+    QUIZ_COLOR_ANSWER,
+    QUIZ_EMOTE_THINK,
+    QUIZ_EMOTE_HAPPY,
+    QUIZ_EMOTE_SAD,
+    QUIZ_INTROS,
+    QUIZ_CORRECT,
+    QUIZ_TIMEOUT_MSG,
+    QUIZ_QUESTIONS,
+    QUIZ_DEFAULT_ROUNDS,
+    START_POSITION,
+    ROOM_ID,
+    API_TOKEN,
+)
 
 class AdvancedBot(BaseBot):
     def __init__(self):
@@ -151,6 +93,7 @@ class AdvancedBot(BaseBot):
             "!thumbs": self.cmd_thumbs,
             "!wallet": self.cmd_wallet,
             "!set": self.cmd_set,
+            "!setstart": self.cmd_setstart,
             "!tip": self.cmd_tip,
             "!vip": self.cmd_vip,
             "!vip1": self.cmd_vip1,
@@ -1319,7 +1262,8 @@ class AdvancedBot(BaseBot):
             return
 
         try:
-            dest = Position(x=11.0, y=7.0, z=11.0)
+            sp = self.config.get("start_position", START_POSITION)
+            dest = Position(x=sp["x"], y=sp["y"], z=sp["z"])
             await self.highrise.teleport(user_id=self.user_id, dest=dest)
             await self.highrise.chat("تم نقل البوت إلى الموقع الابتدائي!")
             logger.info("تم نقل البوت إلى الموقع الأولي.")
@@ -1739,7 +1683,7 @@ class AdvancedBot(BaseBot):
         if self.quiz_task and not self.quiz_task.done():
             await self.highrise.chat("⚠️ المسابقة شغالة هسه! اكتب !quizstop إذا تريد توقفها.")
             return
-        rounds = 5
+        rounds = QUIZ_DEFAULT_ROUNDS
         if len(parts) > 1:
             try:
                 rounds = int(parts[1])
@@ -1796,6 +1740,7 @@ class AdvancedBot(BaseBot):
             "!thumbs all - thumbs-up للجميع\n"
             "!wallet - عرض رصيد البوت\n"
             "!set - نقل البوت إلى المشرف\n"
+            "!setstart - حفظ مكانك كنقطة بداية دائمة للبوت\n"
             "!item set @username - تغيير مظهر البوت إلى عناصر المستخدم\n"
             "!tip <العدد> all - إكرامية للجميع\n"
             "!vip - الانتقال إلى VIP\n"
@@ -2449,6 +2394,25 @@ class AdvancedBot(BaseBot):
             await self.highrise.chat(f"خطأ في نقل البوت: {e}")
             logger.error(f"خطأ في cmd_set: {e}")
 
+    async def cmd_setstart(self, user: User, parts: list):
+        """!setstart - يحفظ مكانك الحالي كنقطة بداية دائمة للبوت (يروح لها كل ما يدخل الغرفة)."""
+        if user.username.lower() not in self.config["admin_usernames"]:
+            await self.highrise.chat(self.get_message("no_permission"))
+            return
+        pos = self.user_positions.get(user.username.lower())
+        if not pos:
+            await self.highrise.chat(f"@{user.username}: موقعك غير معروف.")
+            return
+        try:
+            self.config["start_position"] = {"x": pos.x, "y": pos.y, "z": pos.z}
+            self.save_config()
+            await self.highrise.teleport(user_id=self.user_id, dest=pos)
+            await self.highrise.chat("✅ تم حفظ مكانك كنقطة بداية للبوت!")
+            logger.info(f"{user.username} حدد نقطة بداية البوت: {pos.x}, {pos.y}, {pos.z}")
+        except Exception as e:
+            await self.highrise.chat(f"خطأ في حفظ نقطة البداية: {e}")
+            logger.error(f"خطأ في cmd_setstart: {e}")
+
     async def cmd_vip(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
             await self.highrise.chat(self.get_message("no_permission"))
@@ -3075,8 +3039,8 @@ async def main():
     from http.server import BaseHTTPRequestHandler, HTTPServer
     
     logger.info("جارٍ محاولة تحميل متغيرات البيئة...")
-    room_id = os.getenv("ROOM_ID", "6aca4a18ed40f848041d9a09")
-    api_token = os.getenv("API_TOKEN", "141f12ef1088550ac7242bb95305ee69e9f352b75c79b59cc4f7dca3b5bb02f9")
+    room_id = os.getenv("ROOM_ID", ROOM_ID)
+    api_token = os.getenv("API_TOKEN", API_TOKEN)
     
     if not room_id or not api_token:
         logger.error("لم يتم تعيين ROOM_ID أو API_TOKEN.")
