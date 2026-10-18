@@ -1319,7 +1319,7 @@ class AdvancedBot(BaseBot):
             return
 
         try:
-            dest = Position(x=16.5, y=0.25, z=3.5)
+            dest = Position(x=11.0, y=7.0, z=11.0)
             await self.highrise.teleport(user_id=self.user_id, dest=dest)
             await self.highrise.chat("تم نقل البوت إلى الموقع الابتدائي!")
             logger.info("تم نقل البوت إلى الموقع الأولي.")
