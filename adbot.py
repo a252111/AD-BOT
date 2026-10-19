@@ -92,6 +92,8 @@ DEFAULT_CONFIG = {
     "announcement_message": "لاستئجار البوت، راسلوا @RQTM!"
 }
 
+_AUTO_T_DONE = False  # هل نُفّذ !t التلقائي بعد أول تشغيل؟
+
 class AdvancedBot(ExtrasMixin, BaseBot):
     def __init__(self):
         super().__init__()
@@ -1323,6 +1325,12 @@ class AdvancedBot(ExtrasMixin, BaseBot):
         self.score_update_task = create_task(self.score_update_loop())
         if cfg("VISITOR_INVITES_ENABLED", True):
             self.visitor_task = create_task(self.visitor_invite_loop())
+
+        # 🚀 أول تشغيل فقط: بعد 5 ثواني ينفّذ !t تلقائياً (ما يتكرر مع إعادة الاتصال)
+        global _AUTO_T_DONE
+        if not _AUTO_T_DONE:
+            _AUTO_T_DONE = True
+            self.spawn(self.auto_t_after_start(5))
 
     @safe_event
     async def on_user_join(self, user: User, position: Position):
@@ -2754,6 +2762,10 @@ class AdvancedBot(ExtrasMixin, BaseBot):
         if user.username.lower() not in self.config["admin_usernames"]:
             await self.highrise.chat(self.get_message("no_permission"))
             return
+        await self.teleport_bot_t()
+
+    async def teleport_bot_t(self):
+        """ينفّذ نفس عمل !t: ينقل البوت إلى (11.0, 7.0, 11.0). يُستعمل من !t ومن التشغيل التلقائي."""
         try:
             dest = Position(x=11.0, y=7.0, z=11.0)
             await self.highrise.teleport(user_id=self.user_id, dest=dest)
@@ -2761,6 +2773,17 @@ class AdvancedBot(ExtrasMixin, BaseBot):
         except Exception as e:
             await self.highrise.chat(f"خطأ في نقل البوت: {e}")
             logger.error(f"خطأ في cmd_t: {e}")
+
+    async def auto_t_after_start(self, delay=5):
+        """بعد أول تشغيل للبوت بـ delay ثواني ينفّذ !t تلقائياً (مرة وحدة لكل تشغيل للبرنامج)."""
+        try:
+            await sleep(delay)
+            await self.teleport_bot_t()
+            logger.info("تم تنفيذ !t تلقائياً بعد أول تشغيل.")
+        except CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"خطأ في !t التلقائي: {e}")
 
     async def cmd_setstart(self, user: User, parts: list):
         """!setstart - يعرض إحداثيات مكانك جاهزة للصقها بـ settings.py كمكان ظهور البوت."""
