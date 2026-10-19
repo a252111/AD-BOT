@@ -9,7 +9,13 @@ import json
 import logging
 from datetime import datetime, timedelta
 import random
+import copy
+import time
 import aiohttp
+from logging.handlers import RotatingFileHandler
+
+# ميزات إضافية (مساعدة بالهمس، دعوات الزوار، ألعاب جديدة، حماية من الأعطال)
+from extras import ExtrasMixin, safe_event, atomic_write_json, cfg
 
 # الإعدادات كلها موجودة في ملف settings.py
 from settings import (
@@ -62,7 +68,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler('bot.log'),
+        RotatingFileHandler('bot.log', maxBytes=1_000_000, backupCount=3, encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -86,7 +92,7 @@ DEFAULT_CONFIG = {
     "announcement_message": "لاستئجار البوت، راسلوا @RQTM!"
 }
 
-class AdvancedBot(BaseBot):
+class AdvancedBot(ExtrasMixin, BaseBot):
     def __init__(self):
         super().__init__()
         self.load_config()
@@ -100,6 +106,7 @@ class AdvancedBot(BaseBot):
         self.score_update_task = None
         self.loopchat_task = None
         self.frozen_users = {}
+        self.frozen_positions = {}
         self.party_dances = {}
         self.quiz_task = None
         self.quiz_current = None
@@ -162,6 +169,7 @@ class AdvancedBot(BaseBot):
             "!top": self.cmd_top,
             "!المتصدرين": self.cmd_top
         }
+        self.init_extras()
         self.emotes = {
             "1": "idle_zombie",
             "2": "idle_layingdown2",
@@ -1144,31 +1152,33 @@ class AdvancedBot(BaseBot):
         return username.lower() in [h.lower() for h in self.config.get("host_usernames", [])]
 
     def load_config(self):
+        loaded = None
         try:
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    self.config = json.load(f)
-                # إضافة المفاتيح الجديدة (مثل host_usernames) إلى الإعدادات القديمة
-                # التي قد تكون محفوظة مسبقًا على السيرفر ولا تحتوي على هذا المفتاح
-                for key, value in DEFAULT_CONFIG.items():
-                    if key not in self.config:
-                        self.config[key] = value.copy() if isinstance(value, (list, dict)) else value
+                    loaded = json.load(f)
+                if not isinstance(loaded, dict):
+                    raise ValueError("بنية ملف الإعدادات غير صحيحة")
                 logger.info("تم تحميل الإعدادات بنجاح.")
             else:
                 logger.info("ملف الإعدادات غير موجود، سيتم استخدام الإعدادات الافتراضية...")
-                self.config = DEFAULT_CONFIG
-                self.save_config()
-        except json.JSONDecodeError as e:
-            logger.error(f"خطأ في بنية JSON لملف الإعدادات: {e}")
-            self.config = DEFAULT_CONFIG
-            self.save_config()
         except Exception as e:
-            logger.error(f"خطأ في تحميل الإعدادات: {e}")
-            self.config = DEFAULT_CONFIG
-            self.save_config()
+            # لا نمسح الملف التالف: نحتفظ بنسخة .bak حتى ما تضيع قوائم المشرفين
+            logger.error(f"ملف الإعدادات تالف ({e})، تم حفظ نسخة منه باسم .bak واستخدام الافتراضي.")
+            try:
+                os.replace(CONFIG_FILE, CONFIG_FILE + ".bak")
+            except OSError:
+                pass
+            loaded = None
 
-        # توحيد أسماء المستخدمين إلى أحرف صغيرة (المقارنات في الأوامر تتم بأحرف صغيرة)
-        # ونسخ القوائم حتى لا يتم تعديل DEFAULT_CONFIG مباشرة
+        fresh = loaded is None
+        self.config = loaded if loaded is not None else copy.deepcopy(DEFAULT_CONFIG)
+        # إضافة المفاتيح الجديدة للإعدادات القديمة
+        for key, value in DEFAULT_CONFIG.items():
+            if key not in self.config:
+                self.config[key] = copy.deepcopy(value)
+
+        # توحيد أسماء المستخدمين إلى أحرف صغيرة وحذف التكرار
         for list_key in ("host_usernames", "admin_usernames", "vip_usernames", "banned_users"):
             seen = []
             for name in self.config.get(list_key, []):
@@ -1181,21 +1191,20 @@ class AdvancedBot(BaseBot):
         if "rqtm" not in self.config["host_usernames"]:
             self.config["host_usernames"].append("rqtm")
 
-        # 🛡️ تأكد دائمًا من أن الـ Host موجودون أيضًا في قائمة المشرفين
-        # (الـ Host يملك تلقائيًا جميع صلاحيات المشرف)
+        # الـ Host يملكون تلقائيًا صلاحيات المشرف
         for host in self.config.get("host_usernames", []):
             if host not in self.config["admin_usernames"]:
                 self.config["admin_usernames"].append(host)
 
+        if fresh:
+            self.save_config()
+
     def save_config(self):
         try:
-            config_to_save = self.config.copy()
-            config_to_save["host_usernames"] = list(config_to_save["host_usernames"])
-            config_to_save["admin_usernames"] = list(config_to_save["admin_usernames"])
-            config_to_save["vip_usernames"] = list(config_to_save["vip_usernames"])
-            config_to_save["banned_users"] = list(config_to_save["banned_users"])
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(config_to_save, f, indent=4, ensure_ascii=False)
+            data = dict(self.config)
+            for key in ("host_usernames", "admin_usernames", "vip_usernames", "banned_users"):
+                data[key] = list(data.get(key, []))
+            atomic_write_json(CONFIG_FILE, data)
             logger.info("تم حفظ الإعدادات بنجاح.")
         except Exception as e:
             logger.error(f"خطأ في حفظ الإعدادات: {e}")
@@ -1240,82 +1249,82 @@ class AdvancedBot(BaseBot):
             }
         }
         lang = self.config.get("language", "ar")
-        return messages.get(lang, messages["ar"])[key].format(**kwargs)
+        template = messages.get(lang, messages["ar"])[key]
+        try:
+            return template.format(**kwargs)
+        except (KeyError, IndexError, ValueError):
+            # رسالة ترحيب فيها أقواس {} غلط: نبدل المتغيرات يدوياً بدل ما يطيح الحدث
+            for k, v in kwargs.items():
+                template = template.replace("{" + k + "}", str(v))
+            return template
 
     async def cleanup_tasks(self):
+        async def _cancel(task):
+            if task is None or task.done():
+                return
+            task.cancel()
+            try:
+                await task
+            except (CancelledError, Exception):
+                pass
+
         try:
-            for username, task in self.dance_tasks.items():
-                if not task.done():
-                    task.cancel()
-                try:
-                    await task
-                except CancelledError:
-                    pass
+            for task in list(self.dance_tasks.values()):
+                await _cancel(task)
             self.dance_tasks.clear()
             self.user_dances.clear()
             self.party_dances.clear()
 
-            if self.quiz_task and not self.quiz_task.done():
-                self.quiz_task.cancel()
-            self.quiz_task = None
-            self.quiz_current = None
-            if self.quiz_think_task and not self.quiz_think_task.done():
-                self.quiz_think_task.cancel()
-            self.quiz_think_task = None
-            if self.mafia_task and not self.mafia_task.done():
-                self.mafia_task.cancel()
-            self.mafia_task = None
-            self.mafia = None
-            
-            for username, task in self.frozen_users.items():
-                if not task.done():
-                    task.cancel()
-                try:
-                    await task
-                except CancelledError:
-                    pass
+            for task in list(self.frozen_users.values()):
+                await _cancel(task)
             self.frozen_users.clear()
-            
-            if self.announcement_task and not self.announcement_task.done():
-                self.announcement_task.cancel()
-                try:
-                    await self.announcement_task
-                except CancelledError:
-                    pass
-                self.announcement_task = None
-            if self.score_update_task and not self.score_update_task.done():
-                self.score_update_task.cancel()
-                try:
-                    await self.score_update_task
-                except CancelledError:
-                    pass
-                self.score_update_task = None
+            self.frozen_positions.clear()
+
+            for attr in ("quiz_task", "quiz_think_task", "mafia_task", "loopchat_task",
+                         "announcement_task", "score_update_task", "visitor_task"):
+                await _cancel(getattr(self, attr, None))
+                setattr(self, attr, None)
+            self.quiz_current = None
+            self.mafia = None
+            self.stop_guess()
+
+            for task in list(self._bg_tasks):
+                await _cancel(task)
+            self._bg_tasks.clear()
             logger.info("تم إلغاء جميع المهام غير المتزامنة.")
         except Exception as e:
             logger.error(f"خطأ في إلغاء المهام: {e}")
 
+    @safe_event
     async def on_start(self, session_metadata):
         logger.info("تم اتصال البوت بنجاح.")
         self.user_id = getattr(session_metadata, "user_id", None)
         if not self.user_id:
             logger.error("لم يتم العثور على معرّف البوت في session_metadata.")
-            await self.highrise.chat("❌ تعذر العثور على معرّف البوت.")
             return
 
+        # ملاحظة: ما نرسل رسائل شات عند التشغيل/إعادة الاتصال حتى ما نزعج الغرفة بكل مرة يرجع البوت
         try:
             sp = START_POSITION
             dest = Position(x=sp["x"], y=sp["y"], z=sp["z"])
             await self.highrise.teleport(user_id=self.user_id, dest=dest)
-            await self.highrise.chat("تم نقل البوت إلى الموقع الابتدائي!")
             logger.info("تم نقل البوت إلى الموقع الأولي.")
         except Exception as e:
             logger.error(f"خطأ في النقل الأولي: {e}")
-            await self.highrise.chat(f"خطأ في النقل الأولي: {e}")
 
         await self.sync_room_users()
+
+        # لو on_start انعاد استدعاؤه على نفس النسخة، نلغي المهام القديمة حتى ما تتكرر
+        for attr in ("announcement_task", "score_update_task", "visitor_task"):
+            old = getattr(self, attr, None)
+            if old and not old.done():
+                old.cancel()
         self.announcement_task = create_task(self.announcement_loop())
         self.score_update_task = create_task(self.score_update_loop())
+        if cfg("VISITOR_INVITES_ENABLED", True):
+            self.visitor_task = create_task(self.visitor_invite_loop())
 
+    @safe_event
     async def on_user_join(self, user: User, position: Position):
         username = user.username.lower()
         if username in self.config["banned_users"]:
@@ -1328,9 +1337,12 @@ class AdvancedBot(BaseBot):
         self.active_users[username] = user
         self.user_positions[username] = position
         self.user_scores[username] = self.user_scores.get(username, 0) + 10
+        self.register_visitor(user)          # 💌 تسجيل الزائر (مرة وحدة) لدعوات اشتقنالك
         await self.highrise.chat(self.get_message("welcome", username=user.username))
         logger.info(f"المستخدم {user.username} (ID: {user.id}) دخل الغرفة. الموقع: {position}")
+        await self.send_join_hint(user)
 
+    @safe_event
     async def on_user_leave(self, user: User, position: Position | None = None):
         username = user.username.lower()
         self.active_users.pop(username, None)
@@ -1373,52 +1385,55 @@ class AdvancedBot(BaseBot):
             for username, user_data in current_users.items():
                 self.active_users[username] = user_data[0]
                 self.user_positions[username] = user_data[1]
+                self.register_visitor(user_data[0], save=False)
+            self.save_visitors()
             
             logger.info(f"تمت مزامنة المستخدمين. عدد المستخدمين: {len(self.active_users)}. المستخدمون: {[user.username for user in self.active_users.values()]}")
-            await self.highrise.chat(f"{len(self.active_users)} مستخدمين في الغرفة.")
         except Exception as e:
             logger.error(f"خطأ في مزامنة المستخدمين: {e}", exc_info=True)
-            await self.highrise.chat("تعذر التعرف على مستخدمي الغرفة.")
 
     async def announcement_loop(self):
         try:
             while True:
                 await sleep(self.config["announcement_interval"])
-                await self.highrise.chat(self.config["announcement_message"])
-                logger.info("تم إرسال رسالة الإعلان.")
+                try:
+                    await self.highrise.chat(self.config["announcement_message"])
+                    logger.info("تم إرسال رسالة الإعلان.")
+                except Exception as e:
+                    logger.error(f"خطأ في إرسال الإعلان (سنعيد المحاولة): {e}")
         except CancelledError:
             logger.info("تم إلغاء مهمة الإعلانات.")
-        except Exception as e:
-            logger.error(f"خطأ في حلقة الإعلانات: {e}")
 
     async def score_update_loop(self):
         try:
             while True:
                 await sleep(300)
-                for username in self.active_users:
+                for username in list(self.active_users):
                     self.user_scores[username] = self.user_scores.get(username, 0) + 5
                 logger.info("تم تحديث نقاط المستخدمين.")
         except CancelledError:
             logger.info("تم إلغاء مهمة تحديث النقاط.")
-        except Exception as e:
-            logger.error(f"خطأ في حلقة تحديث النقاط: {e}")
 
+    @safe_event
     async def on_user_move(self, user: User, position: Position):
         username = user.username.lower()
-        self.user_positions[username] = position
-        if username in self.config["admin_usernames"]:
-            logger.info(f"تحرك المشرف {user.username} إلى الموقع x={position.x}, y={position.y}, z={position.z}.")
         if username in self.frozen_users:
-            try:
-                original_position = self.user_positions.get(username)
-                if original_position:
-                    await self.highrise.teleport(user_id=user.id, dest=original_position)
-                    logger.info(f"تمت إعادة المستخدم المجمّد {username} إلى الموقع الأولي x={original_position.x}, y={original_position.y}, z={original_position.z}.")
-            except Exception as e:
-                logger.error(f"خطأ في إعادة {username} إلى موقع التجميد: {e}")
+            # المجمّد: نرجعه لمكان التجميد الأصلي (ما نحدّث موقعه الجديد)
+            frozen_pos = self.frozen_positions.get(username)
+            if frozen_pos is not None:
+                try:
+                    await self.highrise.teleport(user_id=user.id, dest=frozen_pos)
+                except Exception as e:
+                    logger.error(f"خطأ في إعادة {username} إلى موقع التجميد: {e}")
+            return
+        self.user_positions[username] = position
 
+    @safe_event
     async def on_chat(self, user: User, message: str):
+        if user.id == self.user_id:
+            return
         username = user.username.lower()
+        self.active_users.setdefault(username, user)
         msg = message.strip()
         msg_lower = msg.lower()
         
@@ -1453,40 +1468,14 @@ class AdvancedBot(BaseBot):
                 parts_lower = [p.lower() for p in parts]
                 cmd = parts_lower[0] if len(parts_lower) == 1 else ("!item set" if parts_lower[0] == "!item" else parts_lower[0])
                 if cmd in self.commands:
-                    await self.commands[cmd](user, parts)
+                    # نشغل الأمر بالخلفية حتى الأوامر الطويلة (spam/tip/party) ما تعلق استقبال الرسائل
+                    self.spawn(self.run_command(cmd, self.commands[cmd], user, parts))
                 else:
                     await self.highrise.chat(self.get_message("invalid_command"))
         except Exception as e:
             logger.error(f"خطأ في on_chat من {username}: {e}")
 
-    async def on_message(self, user_id: str, text: str, message_id: str) -> None:
-        logger.info(f"📥 رسالة خاصة جديدة من المستخدم [{user_id}]: {text}")
-        
-        # ⛔ منع الرد على رسائل البوت نفسه
-        if user_id == self.user_id:
-            return
-
-        # 👑 نص دعائي لتعريف مميزات البوت مع معلومات الإيجار
-        auto_reply = (
-            "أهلاً بك يا عزيزي! ❤️\n\n"
-            "🤖 أنا بوت متطور ومتكامل لإدارة الغرفة والارتقاء بها!\n\n"
-            "✨ **بعض مميزاتي الرائعة:**\n"
-            "🔹 يحتوي على ٢٥٦ رقصة جذابة تعمل بتكرار دائم وبدون أي تأخير ولو لثانية واحدة! 💃\n"
-            "🔹 نظام ترحيب ذكي وتلقائي بمجرد دخول اللاعبين 🚪\n"
-            "🔹 ميزة الرقص الجماعي والحفلة التلقائية لجميع أعضاء الغرفة 🕺\n"
-            "🔹 أمان عالٍ وإدارة كاملة للمشرفين وأوامر خاصة 🛠️\n"
-            "🔹 استضافة على مدار ٢٤ ساعة وبدون انقطاع على سيرفرات قوية ⚡\n\n"
-            "🤝 **شروط الإيجار:**\n"
-            "لاستئجار هذا البوت الرائع لغرفتك، يرجى مراسلة الحساب التالي الآن:\n"
-            "👉 @RQTM 👈"
-        )
-        
-        try:
-            # ✉️ إرسال الرد مباشرة إلى الرسائل الخاصة (Inbox) للمستخدم
-            await self.highrise.send_message(user_id, auto_reply)
-        except Exception as e:
-            logger.error(f"خطأ في إرسال الرد التلقائي على الرسالة الخاصة: {e}")
-
+    @safe_event
     async def on_tip(self, sender: User, receiver: User, tip):
         try:
             # فحص بنية كائن tip للتأكد من وجود الخاصية amount
@@ -1510,7 +1499,12 @@ class AdvancedBot(BaseBot):
         async def dance_loop():
             try:
                 while self.user_dances.get(username) == emote:
-                    await self.highrise.send_emote(emote, user.id)
+                    if username not in self.active_users:
+                        break
+                    try:
+                        await self.highrise.send_emote(emote, user.id)
+                    except Exception as e:
+                        logger.warning(f"تعذر تشغيل الرقصة {emote} للمستخدم {username}: {e}")
                     await sleep(sleep_time)
             except CancelledError:
                 logger.info(f"تم إلغاء مهمة الرقص للمستخدم {username}.")
@@ -1611,8 +1605,7 @@ class AdvancedBot(BaseBot):
 
     def save_quiz_scores(self):
         try:
-            with open(QUIZ_SCORES_FILE, "w", encoding="utf-8") as f:
-                json.dump(self.quiz_scores, f, indent=4, ensure_ascii=False)
+            atomic_write_json(QUIZ_SCORES_FILE, self.quiz_scores)
         except Exception as e:
             logger.error(f"خطأ في حفظ نقاط المسابقة: {e}")
 
@@ -1652,7 +1645,10 @@ class AdvancedBot(BaseBot):
         async def new_emote_loop():
             try:
                 while True:
-                    await self.highrise.send_emote(emote_name, self.user_id)
+                    try:
+                        await self.highrise.send_emote(emote_name, self.user_id)
+                    except Exception as e:
+                        logger.warning(f"تعذر تشغيل رقصة البوت {emote_name}: {e}")
                     await sleep(sleep_time)
             except CancelledError:
                 logger.info("تم إلغاء رقصة البوت المستمرة.")
@@ -1734,6 +1730,9 @@ class AdvancedBot(BaseBot):
         if self.mafia:
             await self.highrise.chat("⚠️ لعبة المافيا شغالة هسه، اصبروا لين تخلص!")
             return
+        if self.guess:
+            await self.highrise.chat("⚠️ لعبة خمّن الرقم شغالة هسه!")
+            return
         rounds = QUIZ_DEFAULT_ROUNDS
         if len(parts) > 1:
             try:
@@ -1749,11 +1748,14 @@ class AdvancedBot(BaseBot):
         if user.username.lower() not in self.config["admin_usernames"]:
             await self.highrise.chat(self.get_message("no_permission"))
             return
+        stopped_guess = self.stop_guess()
         if self.quiz_task and not self.quiz_task.done():
             self.quiz_task.cancel()
             self.quiz_current = None
             await self.stop_quiz_think()
-            await self.highrise.chat("🛑 انوقفت المسابقة. نشوفكم بجولة ثانية! 👋")
+            await self.highrise.chat("🛑 انوقفت اللعبة. نشوفكم بجولة ثانية! 👋")
+        elif stopped_guess:
+            await self.highrise.chat("🛑 انوقفت لعبة خمّن الرقم.")
         else:
             await self.highrise.chat("ماكو مسابقة شغالة هسه.")
 
@@ -2058,12 +2060,6 @@ class AdvancedBot(BaseBot):
             return
         self.mafia_check_events()
 
-    async def on_whisper(self, user: User, message: str):
-        try:
-            await self.mafia_handle_whisper(user, message)
-        except Exception as e:
-            logger.error(f"خطأ في معالجة همس من {user.username}: {e}")
-
     async def cmd_mafia(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
             await self.highrise.chat(self.get_message("no_permission"))
@@ -2073,6 +2069,9 @@ class AdvancedBot(BaseBot):
             return
         if self.quiz_task and not self.quiz_task.done():
             await self.highrise.chat("⚠️ المسابقة شغالة هسه، اصبروا لين تخلص!")
+            return
+        if self.guess:
+            await self.highrise.chat("⚠️ لعبة خمّن الرقم شغالة هسه، اصبروا لين تخلص!")
             return
         self.mafia = {"phase": "lobby", "players": {}, "night": {}, "votes": {}, "event": None}
         self.mafia_task = create_task(self.run_mafia())
@@ -2124,66 +2123,6 @@ class AdvancedBot(BaseBot):
             await self.highrise.chat(f"{MAFIA_COLOR_MAFIA}🛑 انوقفت لعبة المافيا!")
         else:
             await self.highrise.chat("ماكو لعبة مافيا شغالة هسه.")
-
-    async def cmd_help(self, user: User, parts: list):
-        help_text = (
-            "أوامر البوت:\n"
-            "1-6 - تشغيل رقصة\n"
-            "stop - إيقاف الرقص\n"
-            "!help - عرض المساعدة\n"
-            "!spam العدد الرسالة - إرسال رسائل سبام\n"
-            "!tele @username [vip|vip1|dj|موقع_مخصص] - نقل المستخدم\n"
-            "!tele to @username - الانتقال إلى المستخدم\n"
-            "!tele me @username - نقل المستخدم إلى المشرف\n"
-            "!tele me all - نقل الجميع إلى المشرف\n"
-            "!heart العدد @username - إرسال قلب بنفسجي\n"
-            "!heart all - قلب بنفسجي للجميع\n"
-            "!clap العدد @username - إرسال clap\n"
-            "!clap all - clap للجميع\n"
-            "!wink العدد @username - إرسال wink\n"
-            "!wink all - wink للجميع\n"
-            "!wave العدد @username - إرسال wave\n"
-            "!wave all - wave للجميع\n"
-            "!thumbs العدد @username - إرسال thumbs-up\n"
-            "!thumbs all - thumbs-up للجميع\n"
-            "!wallet - عرض رصيد البوت\n"
-            "!set - نقل البوت إلى المشرف\n"
-            "!t - نقل البوت إلى 11.0, 7.0, 11.0\n"
-            "!setstart - حفظ مكانك كنقطة بداية دائمة للبوت\n"
-            "!item set @username - تغيير مظهر البوت إلى عناصر المستخدم\n"
-            "!tip <العدد> all - إكرامية للجميع\n"
-            "!vip - الانتقال إلى VIP\n"
-            "!vip1 - الانتقال إلى VIP1\n"
-            "!dj - الانتقال إلى DJ\n"
-            "!down - الانتقال إلى الأسفل\n"
-            "!ban @username - حظر المستخدم\n"
-            "!unban @username - إلغاء حظر المستخدم\n"
-            "!dancechain - تشغيل سلسلة الرقص\n"
-            "!addtele اسم_الموقع - حفظ موقع جديد\n"
-            "!deltele اسم_الموقع - حذف موقع النقل\n"
-            "!welcome الرسالة - تعيين رسالة الترحيب\n"
-            "!addadmin @username - إضافة مشرف (Host فقط)\n"
-            "!removeadmin @username - حذف مشرف (Host فقط)\n"
-            "!emotebot اسم/رقم_الرقصة - تغيير رقصة البوت المستمرة (للمشرفين فقط)\n"
-            "!emote رابط_الرقصة - تشغيل أي رقصة من رابط high.rs (دون الحاجة لإضافتها مسبقًا)\n"
-            "!loopchat الرسالة - تعيين رسالة البوت المتكررة/السبام (للمشرفين فقط)\n"
-            "!listadd - عرض قائمة المشرفين\n"
-            "!freeze @username - تجميد المستخدم\n"
-            "!unfreeze @username - إلغاء تجميد المستخدم\n"
-            "!party @username رقم - تشغيل رقص إجباري للمستخدم\n"
-            "!party all رقم - تشغيل الرقص للجميع\n"
-            "!partys @username - إيقاف الرقص الإجباري للمستخدم\n"
-            "!quiz [العدد] - بدء مسابقة المعلومات (للمشرفين)\n"
-            "!quizstop - إيقاف المسابقة (للمشرفين)\n"
-            "!top - عرض المتصدرين\n"
-            "!mafia - بدء لعبة المافيا (للمشرفين)\n"
-            "!join - الدخول للعبة | !vote رقم - التصويت\n"
-            "!mafiastop - إيقاف المافيا (للمشرفين)\n\n"
-            "📩 لمزيد من المعلومات راسل @RQTM!"
-        )
-        for chunk in [help_text[i:i+200] for i in range(0, len(help_text), 200)]:
-            await self.highrise.chat(chunk)
-        logger.info(f"طلب {user.username} المساعدة.")
 
     async def cmd_spam(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
@@ -2901,8 +2840,16 @@ class AdvancedBot(BaseBot):
         if not target_user:
             await self.highrise.chat(self.get_message("user_not_found", username=target_username))
             return
-        self.config["banned_users"].append(target_username)
-        self.save_config()
+        if target_username in self.config["admin_usernames"] or self.is_host(target_username):
+            await self.highrise.chat("❌ ما تقدر تحظر مشرف أو Host!")
+            return
+        if target_username not in self.config["banned_users"]:
+            self.config["banned_users"].append(target_username)
+            self.save_config()
+        try:
+            await self.highrise.moderate_room(target_user.id, "kick")
+        except Exception as e:
+            logger.error(f"تعذر طرد {target_username} بعد الحظر: {e}")
         await self.highrise.chat(self.get_message("ban_success", username=target_username))
         logger.info(f"تم حظر المستخدم {target_username} بواسطة {user.username}.")
 
@@ -2935,11 +2882,14 @@ class AdvancedBot(BaseBot):
 
     async def cmd_dancechain(self, user: User, parts: list):
         dance_list = ["dance-tiktok8", "dance-blackpink", "dance-tiktok2"]
-        for emote in dance_list:
-            await self.highrise.send_emote(emote, user.id)
-            await sleep(self.emote_durations.get(emote, 15.0))
-        await self.highrise.chat(self.get_message("dancechain_success", username=user.username))
-        logger.info(f"تم تشغيل سلسلة الرقص للمستخدم {user.username}.")
+        try:
+            for emote in dance_list:
+                await self.highrise.send_emote(emote, user.id)
+                await sleep(self.emote_durations.get(emote, 15.0))
+            await self.highrise.chat(self.get_message("dancechain_success", username=user.username))
+            logger.info(f"تم تشغيل سلسلة الرقص للمستخدم {user.username}.")
+        except Exception as e:
+            logger.error(f"خطأ في cmd_dancechain: {e}")
 
     async def cmd_addtele(self, user: User, parts: list):
         if user.username.lower() not in self.config["admin_usernames"]:
@@ -3212,8 +3162,8 @@ class AdvancedBot(BaseBot):
             return
 
         position = self.user_positions.get(target_username)
-        if not position:
-            await self.highrise.chat(f"موقع @{target_username} غير متاح.")
+        if not isinstance(position, Position):
+            await self.highrise.chat(f"موقع @{target_username} غير متاح (ممكن جالس على كرسي).")
             logger.info(f"موقع {target_username} غير متاح للتجميد (طلب {user.username}).")
             return
 
@@ -3224,7 +3174,10 @@ class AdvancedBot(BaseBot):
                         self.frozen_users.pop(target_username, None)
                         logger.info(f"أصبح المستخدم {target_username} غير متصل، تم إلغاء التجميد.")
                         break
-                    await self.highrise.teleport(user_id=target_user.id, dest=position)
+                    try:
+                        await self.highrise.teleport(user_id=target_user.id, dest=position)
+                    except Exception as e:
+                        logger.warning(f"تعذر تثبيت {target_username}: {e}")
                     await sleep(1.0)
             except CancelledError:
                 logger.info(f"تم إلغاء مهمة التجميد للمستخدم {target_username}.")
@@ -3233,6 +3186,7 @@ class AdvancedBot(BaseBot):
 
         task = create_task(freeze_loop())
         self.frozen_users[target_username] = task
+        self.frozen_positions[target_username] = position
         await self.highrise.chat(self.get_message("freeze_success", username=target_username))
         logger.info(f"تم تجميد المستخدم {target_username} بواسطة {user.username}.")
 
@@ -3256,6 +3210,7 @@ class AdvancedBot(BaseBot):
 
         try:
             task = self.frozen_users.pop(target_username)
+            self.frozen_positions.pop(target_username, None)
             task.cancel()
             await task
             await self.highrise.chat(self.get_message("unfreeze_success", username=target_username))
@@ -3306,7 +3261,10 @@ class AdvancedBot(BaseBot):
                                     self.party_dances.pop(username, None)
                                     logger.info(f"أصبح المستخدم {username} غير متصل، تم إيقاف الرقص.")
                                     break
-                                await self.highrise.send_emote(emote, target_user.id)
+                                try:
+                                    await self.highrise.send_emote(emote, target_user.id)
+                                except Exception as e:
+                                    logger.warning(f"تعذر تشغيل الرقصة الإجبارية: {e}")
                                 await sleep(duration)
                         except CancelledError:
                             logger.info(f"تم إلغاء مهمة الرقص للمستخدم {username}.")
@@ -3338,7 +3296,10 @@ class AdvancedBot(BaseBot):
                                 self.party_dances.pop(target_username, None)
                                 logger.info(f"أصبح المستخدم {target_username} غير متصل، تم إيقاف الرقص.")
                                 break
-                            await self.highrise.send_emote(emote, target_user.id)
+                            try:
+                                await self.highrise.send_emote(emote, target_user.id)
+                            except Exception as e:
+                                logger.warning(f"تعذر تشغيل الرقصة الإجبارية: {e}")
                             await sleep(duration)
                     except CancelledError:
                         logger.info(f"تم إلغاء مهمة الرقص للمستخدم {target_username}.")
@@ -3403,7 +3364,10 @@ class AdvancedBot(BaseBot):
         async def loopchat_loop():
             try:
                 while True:
-                    await self.highrise.chat(loop_message)
+                    try:
+                        await self.highrise.chat(loop_message)
+                    except Exception as e:
+                        logger.warning(f"تعذر إرسال رسالة loopchat: {e}")
                     await sleep(10.0)  # تكرار كل ١٠ ثوانٍ
             except CancelledError:
                 logger.info("تم إلغاء loopchat.")
@@ -3453,96 +3417,114 @@ async def keep_alive_ping():
         except Exception as e:
             logger.warning(f"فشل keep-alive ping: {e}")
 
-async def handle_ping(request):
-    return aiohttp.web.Response(text="Bot is Alive!")
 
-async def start_background_web_server():
-    try:
-        app = aiohttp.web.Application()
-        app.router.add_get('/', handle_ping)
-        runner = aiohttp.web.AppRunner(app)
-        await runner.setup()
-        port = int(os.getenv("PORT", 8080))
-        site = aiohttp.web.TCPSite(runner, '0.0.0.0', port)
-        await site.start()
-        logger.info(f"تم تشغيل خادم الويب (Keep-Alive) على المنفذ {port}.")
-    except Exception as e:
-        logger.error(f"خطأ في تشغيل خادم الويب في الخلفية: {e}")
-    
-# ٢. الدالة الرئيسية لتشغيل البوت (نسخة مقاومة للأعطال ومزودة بمعالجة أخطاء المهام)
-async def main():
-    import os
-    import asyncio
+def start_health_server():
+    """خادم ويب صغير بخيط منفصل (يرد Bot is Alive) حتى منصات الاستضافة تعتبر البوت شغال."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     import threading
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-    
-    logger.info("جارٍ محاولة تحميل متغيرات البيئة...")
-    room_id = os.getenv("ROOM_ID", ROOM_ID)
-    api_token = os.getenv("API_TOKEN", API_TOKEN)
-    
-    if not room_id or not api_token:
-        logger.error("لم يتم تعيين ROOM_ID أو API_TOKEN.")
-        return
-    
-    logger.info(f"ROOM_ID: {room_id}")
-    logger.info("API_TOKEN: تم تحميله")
 
-    # بنية خادم ويب داخلي وخفيف في بايثون
     class PingHandler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
             self.wfile.write(b"Bot is Alive!")
+
+        def do_HEAD(self):
+            self.send_response(200)
+            self.end_headers()
+
         def log_message(self, format, *args):
             return
 
-    def run_web_server():
+    def run():
         try:
             port = int(os.getenv("PORT", 8080))
-            server = HTTPServer(('0.0.0.0', port), PingHandler)
+            server = ThreadingHTTPServer(('0.0.0.0', port), PingHandler)
             logger.info(f"تم تشغيل خادم الويب (Keep-Alive) على المنفذ {port}.")
             server.serve_forever()
         except Exception as e:
             logger.error(f"خطأ في تشغيل خادم الويب في الخلفية: {e}")
 
-    # تشغيل خادم الويب في خيط منفصل تمامًا لتجنب التجمّد
-    web_thread = threading.Thread(target=run_web_server, daemon=True)
-    web_thread.start()
+    threading.Thread(target=run, daemon=True).start()
 
-    # إعداد معالج الأخطاء العام لـ asyncio حتى لا تتسبب أي مهمة في تعطيل البوت
+
+# ⏱️ إعدادات إعادة الاتصال
+RECONNECT_MIN_DELAY = 5      # أقل انتظار قبل إعادة الاتصال (ثواني)
+RECONNECT_MAX_DELAY = 120    # أكبر انتظار (يتضاعف تدريجياً إذا الاتصال يفشل بسرعة)
+STABLE_SESSION_SECONDS = 120 # إذا اشتغل البوت أكثر من هالمدة نعتبر الاتصال ناجح ونرجّع الانتظار للأقل
+
+
+async def main():
+    """المشرف الرئيسي: يعيد تشغيل البوت للأبد ولا يطلع أبداً (إلا إذا ماكو ROOM_ID/API_TOKEN)."""
+    logger.info("جارٍ محاولة تحميل متغيرات البيئة...")
+    room_id = os.getenv("ROOM_ID") or ROOM_ID
+    api_token = os.getenv("API_TOKEN") or API_TOKEN
+
+    if not room_id or not api_token:
+        logger.error("لم يتم تعيين ROOM_ID أو API_TOKEN.")
+        return
+
+    logger.info(f"ROOM_ID: {room_id}")
+    logger.info("API_TOKEN: تم تحميله")
+
+    start_health_server()
+
+    # أي مهمة خلفية تفشل تنسجل بالـ log وما توقف البوت
     def handle_exception(loop, context):
-        msg = context.get("exception", context["message"])
+        msg = context.get("exception", context.get("message"))
         logger.error(f"فشلت مهمة في الخلفية لكن تمت السيطرة عليها: {msg}")
 
     try:
-        loop = asyncio.get_running_loop()
-        loop.set_exception_handler(handle_exception)
+        asyncio.get_running_loop().set_exception_handler(handle_exception)
     except Exception as le:
         logger.error(f"خطأ في إعداد exception handler: {le}")
 
-    ping_task = asyncio.create_task(keep_alive_ping())
+    ping_task = asyncio.create_task(keep_alive_ping())  # نحتفظ بمرجع حتى ما تنحذف المهمة
 
-    max_reconnect_attempts = 10
-    attempt = 0
-    while attempt < max_reconnect_attempts:
+    from highrise.__main__ import main as highrise_main
+
+    delay = RECONNECT_MIN_DELAY
+    session_no = 0
+    while True:
+        session_no += 1
+        started = time.monotonic()
+        bot_instance = None
         try:
-            room_id = os.environ.get("ROOM_ID", room_id)
             bot_instance = AdvancedBot()
+            bot_instance.room_id = room_id
             bot_def = BotDefinition(room_id=room_id, api_token=api_token, bot=bot_instance)
-            logger.info(f"جارٍ محاولة الاتصال بسيرفر Highrise... الغرفة: {room_id}")
-            from highrise.__main__ import main as highrise_main
+            logger.info(f"جارٍ محاولة الاتصال بسيرفر Highrise... الغرفة: {room_id} (المحاولة رقم {session_no})")
             await highrise_main([bot_def])
-        except Exception as e:
-            logger.error(f"انقطع اتصال WebSocket أو حدث خطأ: {e}")
-            try:
-                await bot_instance.cleanup_tasks()
-            except Exception:
-                pass
-            attempt += 1
-            logger.info(f"في انتظار إعادة الاتصال... المحاولة {attempt} من {max_reconnect_attempts}")
-            await asyncio.sleep(6)
+            logger.warning("انتهى اتصال Highrise بدون خطأ، سيتم إعادة الاتصال.")
+        except asyncio.CancelledError:
+            ping_task.cancel()
+            raise
+        except (Exception, SystemExit) as e:
+            logger.error(f"انقطع اتصال WebSocket أو حدث خطأ: {e!r}", exc_info=True)
+        finally:
+            # نظّف مهام النسخة القديمة دائماً حتى ما تبقى حلقات شبح تشتغل وراء الكواليس
+            if bot_instance is not None:
+                try:
+                    await bot_instance.cleanup_tasks()
+                except Exception as ce:
+                    logger.error(f"خطأ أثناء تنظيف النسخة القديمة: {ce}")
+
+        uptime = time.monotonic() - started
+        delay = RECONNECT_MIN_DELAY if uptime >= STABLE_SESSION_SECONDS else min(delay * 2, RECONNECT_MAX_DELAY)
+        wait = delay + random.uniform(0, delay * 0.25)
+        logger.info(f"البوت اشتغل {int(uptime)} ثانية. إعادة الاتصال بعد {wait:.0f} ثانية...")
+        await asyncio.sleep(wait)
+
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    while True:
+        try:
+            asyncio.run(main())
+            break  # main رجعت بشكل طبيعي = إعدادات ناقصة (ماكو ROOM_ID/API_TOKEN)، ما نكرر
+        except KeyboardInterrupt:
+            logger.info("تم إيقاف البوت يدوياً.")
+            break
+        except Exception as e:
+            logger.error(f"توقف الحلقة الرئيسية بشكل غير متوقع ({e!r})، إعادة التشغيل بعد 5 ثواني.", exc_info=True)
+            time.sleep(5)
