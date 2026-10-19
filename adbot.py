@@ -1457,6 +1457,10 @@ class AdvancedBot(ExtrasMixin, BaseBot):
                 self.quiz_current["event"].set()
                 return
 
+            # 🎮 فحص جواب ألعاب الجولات (!scramble !speed !mathal)
+            if await self.game_on_chat(user, msg):
+                return
+
             if msg_lower in self.emotes:
                 await self.start_dance(user, self.emotes[msg_lower])
             elif msg_lower in ["stop", "ستوب", "توقف", "قف"]:
